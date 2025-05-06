@@ -18,8 +18,6 @@ You open PS, resize layers, fix perspective, patch.
 
 `python spritesheet.py graphics.psd`
 
-⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️
-
 Congrats! You get packed spritesheet and UV coordinates in .txt
 
 ## Details
