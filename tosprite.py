@@ -18,6 +18,7 @@ from modelscope import AutoModelForImageSegmentation
 from modelscope import snapshot_download
 from basicsr.archs.rrdbnet_arch import RRDBNet
 from realesrgan import RealESRGANer
+import gdown
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -283,7 +284,7 @@ def process_image(img_path, max_width, max_height, nst, psd, edgePreservingFilte
 
     if nst is not None:
         corrected = nst(corrected)
-        
+
     height, width = corrected.shape[:2]
     corrected, _ = refiner.enhance(corrected)
     corrected = cv2.resize(corrected, (width, height), interpolation=cv2.INTER_LANCZOS4)
@@ -475,6 +476,10 @@ if __name__ == "__main__":
     parser.add_argument("-b", "--edgepreservingfilter_sigma_s", type=float, default=0, help="Blur 1 - 200.0. For edgePreservingFilter.")
     parser.add_argument("-o", "--output", default="output.psd", help="Output PSD name.")
     args = parser.parse_args()
+
+    if not os.path.exists('models'):
+        drive_path = 'https://drive.google.com/drive/folders/1gxAukn_M7YNbnWfg_OrV6BxlNWUuDPmL'
+        gdown.download_folder(url=drive_path, output='models', quiet=False, use_cookies=False)
 
     # Загрузка модели стиля, если указан стиль
     nst = None
