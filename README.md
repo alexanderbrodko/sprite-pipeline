@@ -18,6 +18,9 @@ You open PS, resize layers, fix perspective, patch.
 
 `python spritesheet.py graphics.psd`
 
+![image](https://github.com/user-attachments/assets/8f7ed3f2-b918-4268-a123-a919f21e2485)
+![image](https://github.com/user-attachments/assets/8a650d62-fa07-426c-a2fa-600af78e0420)
+
 Congrats! You get packed spritesheet and UV coordinates in .txt
 
 ## Details
@@ -27,3 +30,10 @@ Congrats! You get packed spritesheet and UV coordinates in .txt
 3. [nst_vgg19](https://github.com/alexanderbrodko/nst_vgg19) for Neural Style Transfer
 4. [RealESRGAN_MtG](https://huggingface.co/rullaf/RealESRGAN_MtG) to improve quality
 5. OpenCV to other filters and algorithms
+
+
+## Requirements
+`pip install numpy opencv-python torch torchvision pillow psd-tools rectpack modelscope realesrgan nst_vgg19 gdown`
+
+
+
