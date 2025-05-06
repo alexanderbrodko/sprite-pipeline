@@ -471,7 +471,7 @@ if __name__ == "__main__":
         gdown.download_folder(url=drive_path, output='models', quiet=False, use_cookies=False)
 
     # Парсинг аргументов командной строки
-    parser = argparse.ArgumentParser(description="Apply RetinexNet, SAM, and style transfer to images.")
+    parser = argparse.ArgumentParser(description="Make PSD group from folder with sprites.")
     parser.add_argument("--style", required=False, help="Path to the style image.")
     parser.add_argument("folder", help="Path to folder with images.")
     parser.add_argument("-W", "--max_width", type=int, default=512, help="Max sprite width.")
