@@ -466,6 +466,10 @@ def create_uv_file(psd, name):
         uv_file.write(",".join(map(str, uv_coordinates)) + "\n")
 
 if __name__ == "__main__":
+    if not os.path.exists('models'):
+        drive_path = 'https://drive.google.com/drive/folders/1gxAukn_M7YNbnWfg_OrV6BxlNWUuDPmL'
+        gdown.download_folder(url=drive_path, output='models', quiet=False, use_cookies=False)
+
     # Парсинг аргументов командной строки
     parser = argparse.ArgumentParser(description="Apply RetinexNet, SAM, and style transfer to images.")
     parser.add_argument("--style", required=False, help="Path to the style image.")
@@ -476,10 +480,6 @@ if __name__ == "__main__":
     parser.add_argument("-b", "--edgepreservingfilter_sigma_s", type=float, default=0, help="Blur 1 - 200.0. For edgePreservingFilter.")
     parser.add_argument("-o", "--output", default="output.psd", help="Output PSD name.")
     args = parser.parse_args()
-
-    if not os.path.exists('models'):
-        drive_path = 'https://drive.google.com/drive/folders/1gxAukn_M7YNbnWfg_OrV6BxlNWUuDPmL'
-        gdown.download_folder(url=drive_path, output='models', quiet=False, use_cookies=False)
 
     # Загрузка модели стиля, если указан стиль
     nst = None
@@ -504,7 +504,7 @@ if __name__ == "__main__":
     except Exception as e:
         psd_main = PSDImage.new(mode='RGBA', size=(1000, 1000))
 
-    retinexnet = RetinexNetWrapper('decom.tar', 'relight.tar').to(device)
+    retinexnet = RetinexNetWrapper('models/decom.tar', 'models/relight.tar').to(device)
 
     birefnet = AutoModelForImageSegmentation.from_pretrained('modelscope/BiRefNet', trust_remote_code=True)
     torch.set_float32_matmul_precision(['high', 'highest'][0])
@@ -516,7 +516,7 @@ if __name__ == "__main__":
 
     upsampler = RealESRGANer(
         scale=1,
-        model_path='RealESRGAN_x2plus_mtg_v1.pth',
+        model_path='models/RealESRGAN_x2plus_mtg_v1.pth',
         dni_weight=None,
         model=esrgan4plus,
         tile=0,
