@@ -15,7 +15,7 @@ import argparse
 from psd_tools import PSDImage
 from psd_tools.api.layers import Group, PixelLayer, Compression
 from PIL import Image
-from spritesheet import pack_psd
+from sp_pack import pack_psd
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -357,8 +357,7 @@ def main():
         half=False,
         gpu_id=None)
 
-    args.folder = os.path.basename(args.folder)
-    group = Group.new(args.folder, open_folder=False, parent=psd_main)
+    group = Group.new(os.path.basename(args.folder), open_folder=False, parent=psd_main)
     for filename in os.listdir(args.folder):
         image_path = os.path.join(args.folder, filename)
         process_image(image_path, args.max_width, args.max_height, nst, group, args.edgepreservingfilter_sigma_s, retinexnet, birefnet, upsampler)
