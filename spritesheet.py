@@ -160,6 +160,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Make spritesheets from PSD.")
     parser.add_argument("psd", help="Path to your PSD with groups.")
     parser.add_argument("-o", "--output_dir", default='.', help="Output dir.")
+    parser.add_argument("--format", default='png', help="Output image format.")
     args = parser.parse_args()
 
     psd_main = PSDImage.open(args.psd)
@@ -176,7 +177,7 @@ if __name__ == "__main__":
         cropped_image = image.crop(bbox)
         image = ImageOps.expand(cropped_image, border=1, fill=(0, 0, 0, 0))
 
-        png_path = os.path.join(args.output_dir, group.name + '.png')
+        png_path = os.path.join(args.output_dir, group.name + '.' + args.format)
         image.save(png_path)
         txt_path = os.path.join(args.output_dir, group.name + '_uv.txt')
         create_uv_file(group, image.width, image.height, txt_path)
