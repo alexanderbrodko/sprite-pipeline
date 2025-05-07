@@ -118,7 +118,7 @@ def pack_psd(psd):
     
     repack_layers(psd, packer, layers_info)
 
-def create_uv_file(psd, path):
+def create_uv_file(psd, width, height, path):
     """
     Создает файл uv.txt с именами всех слоев и их UV-координатами.
     
@@ -135,10 +135,10 @@ def create_uv_file(psd, path):
         layer_names.append(layer.name)
         
         # Вычисляем UV-координаты
-        u0 = layer.left / psd.width
-        v0 = layer.top / psd.height
-        u1 = layer.right / psd.width
-        v1 = layer.bottom / psd.height
+        u0 = layer.left / width
+        v0 = layer.top / height
+        u1 = layer.right / width
+        v1 = layer.bottom / height
         
         # Добавляем UV-координаты в список
         uv_coordinates.extend([
@@ -170,8 +170,13 @@ if __name__ == "__main__":
         pack_psd(group)
 
         image = group.composite(force=True)
+        bbox = image.getbbox()
+        if bbox is None:
+            continue
+        cropped_image = image.crop(bbox)
+        image = ImageOps.expand(cropped_image, border=1, fill=(0, 0, 0, 0))
 
         png_path = os.path.join(args.output_dir, group.name + '.png')
         image.save(png_path)
         txt_path = os.path.join(args.output_dir, group.name + '_uv.txt')
-        create_uv_file(group, txt_path)
+        create_uv_file(group, image.width, image.height, txt_path)
