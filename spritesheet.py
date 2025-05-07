@@ -156,7 +156,7 @@ def create_uv_file(psd, width, height, path):
         # Вторая строка: UV-координаты через запятую
         uv_file.write(",".join(map(str, uv_coordinates)) + "\n")
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Make spritesheets from PSD.")
     parser.add_argument("psd", help="Path to your PSD with groups.")
     parser.add_argument("-o", "--output_dir", default='.', help="Output dir.")
@@ -181,3 +181,6 @@ if __name__ == "__main__":
         image.save(png_path)
         txt_path = os.path.join(args.output_dir, group.name + '_uv.txt')
         create_uv_file(group, image.width, image.height, txt_path)
+
+if __name__ == "__main__":
+    main()

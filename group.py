@@ -297,7 +297,7 @@ def process_image(img_path, max_width, max_height, nst, psd, edgePreservingFilte
     layer = PixelLayer.frompil(image, root, base_name, 0, 0, Compression.RAW)
     psd.append(layer)
 
-if __name__ == "__main__":
+def main():
     if not os.path.exists('models'):
         drive_path = 'https://drive.google.com/drive/folders/1gxAukn_M7YNbnWfg_OrV6BxlNWUuDPmL'
         gdown.download_folder(url=drive_path, output='models', quiet=False, use_cookies=False)
@@ -369,3 +369,6 @@ if __name__ == "__main__":
     pack_psd(group)
 
     psd_main.save(args.output)
+
+if __name__ == "__main__":
+    main()
