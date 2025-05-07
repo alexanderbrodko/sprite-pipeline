@@ -177,21 +177,14 @@ def load_image(img_path, max_width=2048, max_height=2048):
     if not os.path.exists(img_path):
         raise FileNotFoundError(f"Файл не найден: {img_path}")
 
-    # Чтение изображения
-    original = cv2.imread(img_path)
-    if original is None:
+    try:
+        pil_image = Image.open(img_path).convert('RGB')
+        original = np.array(pil_image)
+    except Exception as e:
         raise ValueError(f"Файл не является изображением или поврежден: {img_path}")
 
     print(img_path)
     
-    # Удаление альфа-канала, если он есть
-    if len(original.shape) == 3 and original.shape[2] == 4:  # Проверка наличия альфа-канала
-        original = original[:, :, :3]
-        print(f'^skip alpha')
-
-    # Преобразование цветового пространства BGR -> RGB
-    original = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
-
     # Уменьшение размера, если изображение слишком большое
     original_height, original_width = original.shape[:2]
     new_width, new_height = get_max_size(original_width, original_height, max_width, max_height)
