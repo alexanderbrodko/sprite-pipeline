@@ -25,7 +25,6 @@ def process_layers(psd):
         
         # Шаг 2: Добавляем рамку в 1 прозрачный пиксель
         bordered_image = ImageOps.expand(cropped_image, border=1, fill=(0, 0, 0, 0))
-        bordered_image.save(f'sprites/{layer.name}.png')
         
         # Сохраняем информацию о слое
         layers_info.append({

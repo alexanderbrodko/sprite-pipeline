@@ -260,10 +260,6 @@ def process_image(img_path, max_width, max_height, nst, psd, edgePreservingFilte
         return
     
     base_name = os.path.splitext(os.path.basename(img_path))[0]
-    output_dir = 'sprites'
-    output_path = os.path.join(output_dir, f"{base_name}")
-    os.makedirs(output_dir, exist_ok=True)
-
     original = clahe(original)
 
     corrected = original
@@ -291,10 +287,7 @@ def process_image(img_path, max_width, max_height, nst, psd, edgePreservingFilte
     corrected_rgba = apply_mask(corrected, mask)
 
     image = Image.fromarray(corrected_rgba, mode="RGBA")
-
-    image.save(output_path + '.png')
     height, width = corrected.shape[:2]
-
     image = image.resize((width // 2, height // 2), Image.LANCZOS)
 
     bbox = image.getbbox()  # Получаем ограничивающую рамку
