@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="sprite-pipeline",
-    version="0.1.0",
+    version="0.1.1",
     author="Alexander Brodko",
     description="A pipeline for converting images into stylized game sprites with style transfer, enhancement, and sprite sheet generation.",
     long_description=open("README.md").read(),
@@ -18,7 +18,10 @@ setup(
         "psd-tools",
         "rectpack",
         "modelscope",
-        "basicsr",
+        "transformers",
+        "diffusers",
+        "retinex",
+        "basicsr-fixed",
         "realesrgan",
         "nst_vgg19",
         "gdown"
