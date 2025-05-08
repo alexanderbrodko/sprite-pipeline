@@ -158,7 +158,7 @@ def create_uv_file(psd, width, height, path):
 
 def main():
     parser = argparse.ArgumentParser(description="Make spritesheets from PSD.")
-    parser.add_argument("psd", help="Path to your PSD with groups.")
+    parser.add_argument("psd", nargs='?', default="output.psd", help="Path to your PSD with groups.")
     parser.add_argument("-o", "--output_dir", default='.', help="Output dir.")
     parser.add_argument("--format", default='png', help="Output image format.")
     args = parser.parse_args()
