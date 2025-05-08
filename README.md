@@ -12,16 +12,38 @@ You download images to a folder
 
 ⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️
 
-You open PS, resize layers, fix perspective, patch.
+You open output.psd, resize layers, fix perspective, patch.
 
 ⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️
 
-`sp_pack graphics.psd`
+`sp_pack`
 
 ![image](https://github.com/user-attachments/assets/8f7ed3f2-b918-4268-a123-a919f21e2485)
 ![image](https://github.com/user-attachments/assets/8a650d62-fa07-426c-a2fa-600af78e0420)
 
 Congrats! You get packed spritesheet and UV coordinates in .txt
+
+## Features
+
+- Foreground extraction
+- Light correction
+- Style transfer
+- PSD building
+- Spritesheet packing
+
+## CLI args
+
+#### sp_group
+
+`sp_group folder_name/ --style STYLE_IMAGE -W MAX_WIDTH -H MAX_HEIGHT -f STYLE_FORCE -b BLUR -o OUTPUT_PSD`
+
+Creates PSD file containing group `folder_name` where each layer is a processed image with the specified maximum dimensions.
+
+#### sp_pack
+
+`sp_pack psd_file.psd -o OUTPUT_DIR --format SPRITESHEET_IMAGE_FORMAT`
+
+For each group in PSD creates packed spritesheet image and UV coordinates file named group_name.fmt and group_name_uvs.txt.
 
 ## Details
 
@@ -30,15 +52,3 @@ Congrats! You get packed spritesheet and UV coordinates in .txt
 3. [nst_vgg19](https://github.com/alexanderbrodko/nst_vgg19) for Neural Style Transfer
 4. [RealESRGAN_MtG](https://huggingface.co/rullaf/RealESRGAN_MtG) to improve quality
 5. OpenCV to other filters and algorithms
-
-
-## Requirements
-`pip install numpy opencv-python torch torchvision pillow psd-tools rectpack modelscope realesrgan nst_vgg19 gdown`
-
-## CLI args
-
-`sp_group --style STYLE_IMAGE -W MAX_WIDTH -H MAX_HEIGHT -f STYLE_FORCE -b BLUR -o OUTPUT_PSD folder_name/`
-Creates PSD file containing group `folder_name` where each layer is a processed image with the specified maximum dimensions.
-
-`sp_pack -o OUTPUT_DIR --format SPRITESHEET_IMAGE_FORMAT psd_file.psd`
-For each group in PSD creates packed spritesheet image and UV coordinates file named group_name.fmt and group_name_uvs.txt.
