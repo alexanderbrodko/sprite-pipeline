@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="sprite-pipeline",
-    version="0.1.3",
+    version="0.1.4",
     author="Alexander Brodko",
     description="A pipeline for converting images into stylized game sprites with style transfer, enhancement, and sprite sheet generation.",
     long_description=open("README.md").read(),
