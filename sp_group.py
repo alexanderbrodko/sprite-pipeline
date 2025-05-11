@@ -356,7 +356,8 @@ def main():
         half=False,
         gpu_id=None)
 
-    group = Group.new(os.path.basename(args.folder), open_folder=False, parent=psd_main)
+    group_name = os.path.basename(os.path.normpath(args.folder))
+    group = Group.new(group_name, open_folder=False, parent=psd_main)
     for filename in os.listdir(args.folder):
         image_path = os.path.join(args.folder, filename)
         process_image(image_path, args.max_width, args.max_height, nst, group, args.edgepreservingfilter_sigma_s, args.shades, retinexnet, birefnet, upsampler)
