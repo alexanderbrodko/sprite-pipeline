@@ -246,19 +246,17 @@ def add_max_size_layer(psd, max_width, max_height, color=(255, 0, 0)):
 
     psd.append(new_layer)
 
-def process_image(img_path, max_width, max_height, nst, psd, edgePreservingFilter_sigma_s=0, retinexnet=None, birefnet=None, refiner=None):
+def process_image(img_path, max_width, max_height, nst, psd, edgePreservingFilter_sigma_s=0, clahe_mix_alpha=1, retinexnet=None, birefnet=None, refiner=None):
     try:
         original = load_image(img_path, max_width * 2, max_height * 2)
     except Exception as e:
         return
     
     base_name = os.path.splitext(os.path.basename(img_path))[0]
-    original = clahe(original)
 
-    corrected = original
-    #height, width = corrected.shape[:2]
-    #corrected = cv2.resize(corrected, (width * 2, height * 2), interpolation=cv2.INTER_LANCZOS4)
-    
+    shaded = clahe(original)
+    corrected = (shaded.astype(np.float32) * clahe_mix_alpha + original.astype(np.float32) * (1 - clahe_mix_alpha)).astype(np.uint8)
+
     corrected = flat_lights(original, retinexnet)
 
     enhanced = msrcr(original, sigmas=[15, 80, 250])
@@ -275,7 +273,7 @@ def process_image(img_path, max_width, max_height, nst, psd, edgePreservingFilte
     corrected, _ = refiner.enhance(corrected)
     corrected = cv2.resize(corrected, (width, height), interpolation=cv2.INTER_LANCZOS4)
 
-    mask = extract_foreground_mask(original, birefnet)
+    mask = extract_foreground_mask(shaded, birefnet)
 
     corrected_rgba = apply_mask(corrected, mask)
 
@@ -310,6 +308,7 @@ def main():
     parser.add_argument("-H", "--max_height", type=int, default=512, help="Max sprite height.")
     parser.add_argument("-f", "--nst_force", type=float, default=1, help="Neural style transfer - weights mul.")
     parser.add_argument("-b", "--edgepreservingfilter_sigma_s", type=float, default=0, help="Blur 1 - 200.0. For edgePreservingFilter.")
+    parser.add_argument("-s", "--shades", type=float, default=1, help="Shades improvement 0-1. For Clahe filter.")
     parser.add_argument("-o", "--output", default="output.psd", help="Output PSD name.")
     args = parser.parse_args()
 
@@ -360,7 +359,7 @@ def main():
     group = Group.new(os.path.basename(args.folder), open_folder=False, parent=psd_main)
     for filename in os.listdir(args.folder):
         image_path = os.path.join(args.folder, filename)
-        process_image(image_path, args.max_width, args.max_height, nst, group, args.edgepreservingfilter_sigma_s, retinexnet, birefnet, upsampler)
+        process_image(image_path, args.max_width, args.max_height, nst, group, args.edgepreservingfilter_sigma_s, args.shades, retinexnet, birefnet, upsampler)
 
     add_max_size_layer(group, args.max_width, args.max_height)
 
