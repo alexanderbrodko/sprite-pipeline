@@ -338,7 +338,7 @@ def main():
     retinexnet = RetinexNetWrapper('models/decom.tar', 'models/relight.tar').to(device)
 
     birefnet = AutoModelForImageSegmentation.from_pretrained('modelscope/BiRefNet', trust_remote_code=True)
-    torch.set_float32_matmul_precision(['high', 'highest'][0])
+    torch.set_float32_matmul_precision('high')
     birefnet.to(device)
     birefnet.eval()
     birefnet.half()
