@@ -21,7 +21,7 @@ setup(
         "transformers",
         "diffusers",
         "retinex",
-        "basicsr-fixed",
+        "basicsr",
         "realesrgan",
         "nst_vgg19",
         "gdown"

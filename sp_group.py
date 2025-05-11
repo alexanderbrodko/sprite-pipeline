@@ -7,6 +7,19 @@ from torchvision import transforms, models
 from nst_vgg19 import NST_VGG19
 from retinex import msrcr
 from modelscope import AutoModelForImageSegmentation
+
+import sys
+# Hack to fix a changed import in torchvision 0.17+, which otherwise breaks
+# basicsr; see https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/13985
+try:
+    import torchvision.transforms.functional_tensor
+except ImportError:
+    try:
+        import torchvision.transforms.functional as functional
+        sys.modules["torchvision.transforms.functional_tensor"] = functional
+    except ImportError:
+        pass  # shrug...
+
 from basicsr.archs.rrdbnet_arch import RRDBNet
 from realesrgan import RealESRGANer
 import gdown
