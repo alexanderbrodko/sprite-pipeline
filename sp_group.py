@@ -231,7 +231,7 @@ def clahe(image):
     enhanced_rgb_image = cv2.cvtColor(enhanced_lab_image, cv2.COLOR_LAB2RGB)
     return enhanced_rgb_image
 
-def add_max_size_layer(psd, max_width, max_height, color=(255, 0, 0)):
+def add_max_size_layer(psd, max_width, max_height, color=(0, 255, 0)):
     for layer in psd:
         if layer.name == 'max_size':
             return
