@@ -4,8 +4,7 @@ import torch
 import torch.nn as nn
 import torchvision
 from torchvision import transforms, models
-from nst_vgg19 import NST_VGG19
-from retinex import msrcr
+from nst_vgg19 import NST_VGG19_AdaIN
 from modelscope import AutoModelForImageSegmentation
 
 import sys
@@ -186,40 +185,43 @@ def get_max_size(w, h, max_w, max_h):
     return int(w * scale), int(h * scale)
 
 def load_image(img_path, max_width=2048, max_height=2048):
-    # Проверка существования файла
     if not os.path.exists(img_path):
-        raise FileNotFoundError(f"Файл не найден: {img_path}")
+        raise FileNotFoundError(f"Not found: {img_path}")
 
     try:
-        pil_image = Image.open(img_path).convert('RGB')
-        original = np.array(pil_image)
+        # Always load with alpha so we can extract the mask if needed
+        pil_image = Image.open(img_path).convert("RGBA")
+        rgba = np.array(pil_image)  # Shape: (H, W, 4)
+
+        # Extract RGB and alpha channel
+        original = rgba[:, :, :3]  # This ensures RGB output (H, W, 3)
+        alpha = rgba[:, :, 3]     # Alpha channel for mask
+
+        # If any pixel is transparent → use alpha as mask
+        if np.any(alpha < 255):
+            mask = alpha
+        else:
+            mask = None
+
     except Exception as e:
-        raise ValueError(f"Файл не является изображением или поврежден: {img_path}")
+        raise ValueError(f"Can not load: {img_path}") from e
 
     print(img_path)
     
-    # Уменьшение размера, если изображение слишком большое
-    original_height, original_width = original.shape[:2]
-    new_width, new_height = get_max_size(original_width, original_height, max_width, max_height)
-    if original_width != new_width or original_height != new_height:
+    # Resize if necessary
+    height, width = original.shape[:2]
+    new_width, new_height = get_max_size(width, height, max_width, max_height)
+    
+    if width != new_width or height != new_height:
         original = cv2.resize(original, (new_width, new_height), interpolation=cv2.INTER_LANCZOS4)
+        if mask is not None:
+            mask = cv2.resize(mask, (new_width, new_height), interpolation=cv2.INTER_LANCZOS4)
 
-    return original
+    return original, mask
 
 def apply_mask(image_np, mask_np):
-    """
-    Применяет маску к изображению.
-    
-    Args:
-        image_np (np.ndarray): Исходное изображение в виде Numpy-массива (H, W, C) в диапазоне [0, 255].
-        mask_np (np.ndarray): Маска в виде Numpy-массива (H, W) или (H, W, 1) в диапазоне [0, 255].
-    
-    Returns:
-        np.ndarray: Изображение с примененной маской в виде Numpy-массива (H, W, 4) в формате RGBA.
-    """
-    # Убедимся, что маска имеет тот же размер, что и изображение
     if mask_np.shape[:2] != image_np.shape[:2]:
-        raise ValueError("Размеры изображения и маски должны совпадать.")
+        raise ValueError("Image and mask size must be the same.")
     
     # Если маска одноканальная (grayscale), добавляем канал
     if len(mask_np.shape) == 2:
@@ -231,62 +233,51 @@ def apply_mask(image_np, mask_np):
             [image_np, mask_np], axis=2
         ).astype(np.uint8)
     else:
-        raise ValueError("Изображение должно быть в формате RGB (H, W, 3).")
+        raise ValueError("Image must be RGB (H, W, 3).")
     
     return image_with_alpha
 
-def clahe(image):
-    lab_image = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-    l_channel, a_channel, b_channel = cv2.split(lab_image)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced_l_channel = clahe.apply(l_channel)
-    enhanced_lab_image = cv2.merge((enhanced_l_channel, a_channel, b_channel))
-    enhanced_rgb_image = cv2.cvtColor(enhanced_lab_image, cv2.COLOR_LAB2RGB)
-    return enhanced_rgb_image
-
-def add_max_size_layer(psd, max_width, max_height, color=(0, 255, 0)):
+def add_max_size_layer(psd, max_width, max_height, source_image_np):
     for layer in psd:
         if layer.name == 'max_size':
             return
 
-    image = Image.fromarray(np.full((max_height, max_width, 3), color, dtype=np.uint8), mode='RGB')
+    source_image = Image.fromarray(source_image_np)
+
+    img_width, img_height = source_image.size
+
+    left = (img_width - max_width) // 2
+    top = (img_height - max_height) // 2
+    right = left + max_width
+    bottom = top + max_height
+
+    cropped_image = source_image.crop((left, top, right, bottom))
 
     root = psd
     while root.parent:
         root = root.parent
 
-    new_layer = PixelLayer.frompil(image, root, 'max_size', 0, 0, Compression.RAW)
-
+    new_layer = PixelLayer.frompil(cropped_image, root, 'max_size', 0, 0, Compression.RAW)
     psd.append(new_layer)
 
-def process_image(img_path, max_width, max_height, nst, psd, edgePreservingFilter_sigma_s=0, clahe_mix_alpha=1, retinexnet=None, birefnet=None, refiner=None):
+def process_image(img_path, max_width, max_height, nst, psd, retinexnet=None, birefnet=None, refiner=None):
     try:
-        original = load_image(img_path, max_width * 2, max_height * 2)
+        original, mask = load_image(img_path, max_width * 2, max_height * 2)
     except Exception as e:
         return
     
     base_name = os.path.splitext(os.path.basename(img_path))[0]
 
-    shaded = clahe(original)
-    corrected = (shaded.astype(np.float32) * clahe_mix_alpha + original.astype(np.float32) * (1 - clahe_mix_alpha)).astype(np.uint8)
-
     corrected = flat_lights(original, retinexnet)
 
-    enhanced = msrcr(original, sigmas=[15, 80, 250])
-
-    corrected = (corrected.astype(np.float32) * 0.6 + enhanced.astype(np.float32) * 0.4).astype(np.uint8)
-
-    if edgePreservingFilter_sigma_s >= 1:
-        corrected = cv2.edgePreservingFilter(corrected, flags=2, sigma_s=edgePreservingFilter_sigma_s, sigma_r=0.4)
-
     if nst is not None:
+        height, width = original.shape[:2]
+        corrected, _ = refiner.enhance(corrected)
         corrected = nst(corrected)
+        corrected = cv2.resize(corrected, (width, height), interpolation=cv2.INTER_LANCZOS4)
 
-    height, width = corrected.shape[:2]
-    corrected, _ = refiner.enhance(corrected)
-    corrected = cv2.resize(corrected, (width, height), interpolation=cv2.INTER_LANCZOS4)
-
-    mask = extract_foreground_mask(shaded, birefnet)
+    if mask is None:
+        mask = extract_foreground_mask(original, birefnet)
 
     corrected_rgba = apply_mask(corrected, mask)
 
@@ -309,46 +300,47 @@ def process_image(img_path, max_width, max_height, nst, psd, edgePreservingFilte
     psd.append(layer)
 
 def main():
-    if not os.path.exists('models'):
+    model_dir = os.path.expanduser('~/.cache/sprite-pipeline/')
+    realesrgan_path = os.path.join(model_dir,'models/RealESRGAN_x2plus_mtg_v1.pth')
+    decom_path = os.path.join(model_dir, 'models/decom.tar')
+    relight_path = os.path.join(model_dir, 'models/relight.tar')
+    if not (
+        os.path.isfile(realesrgan_path) or
+        os.path.isfile(decom_path) or
+        os.path.isfile(relight_path)
+    ):
         drive_path = 'https://drive.google.com/drive/folders/1gxAukn_M7YNbnWfg_OrV6BxlNWUuDPmL'
-        gdown.download_folder(url=drive_path, output='models', quiet=False, use_cookies=False)
+        gdown.download_folder(url=drive_path, output=model_dir, quiet=False, use_cookies=False)
 
-    # Парсинг аргументов командной строки
     parser = argparse.ArgumentParser(description="Make PSD group from folder with sprites.")
-    parser.add_argument("--style", required=False, help="Path to the style image.")
     parser.add_argument("folder", help="Path to folder with images.")
+    parser.add_argument("-s", "--style", required=False, help="Path to the style image.")
     parser.add_argument("-W", "--max_width", type=int, default=512, help="Max sprite width.")
     parser.add_argument("-H", "--max_height", type=int, default=512, help="Max sprite height.")
     parser.add_argument("-f", "--nst_force", type=float, default=1, help="Neural style transfer - weights mul.")
-    parser.add_argument("-b", "--edgepreservingfilter_sigma_s", type=float, default=0, help="Blur 1 - 200.0. For edgePreservingFilter.")
-    parser.add_argument("-s", "--shades", type=float, default=1, help="Shades improvement 0-1. For Clahe filter.")
     parser.add_argument("-o", "--output", default="output.psd", help="Output PSD name.")
     args = parser.parse_args()
 
-    # Загрузка модели стиля, если указан стиль
+    esrgan2plus = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=2)
+
+    upsampler = RealESRGANer(
+        scale=1,
+        model_path=realesrgan_path,
+        dni_weight=None,
+        model=esrgan2plus,
+        tile=0,
+        tile_pad=0,
+        pre_pad=0,
+        half=False,
+        gpu_id=None)
+
     nst = None
     if args.style:
-        style_image = load_image(args.style)
-        mul = args.nst_force
-        STYLE_WEIGHTS = {
-            'conv_2': 0.000001 * mul,  # Light/shadow?
-            'conv_4': 0.000009 * mul,  # Contrast?
-            'conv_5': 0.000006 * mul,  # Volume?
-            'conv_7': 0.000003 * mul,
-            'conv_8': 0.000002 * mul,  # Dents?
-            'conv_9': 0.000003 * mul,
-            'conv_11': 0.000001 * mul,
-            'conv_13': 0.000001 * mul,
-            'conv_15': 0.000001 * mul,
-        }
-        nst = NST_VGG19(style_image, style_layers_weights=STYLE_WEIGHTS)
+        style_image, _ = load_image(args.style)
+        style_image, _ = upsampler.enhance(style_image)
+        nst = NST_VGG19_AdaIN(style_image, args.nst_force)
 
-    try:
-        psd_main = PSDImage.open(args.output)
-    except Exception as e:
-        psd_main = PSDImage.new(mode='RGBA', size=(1000, 1000))
-
-    retinexnet = RetinexNetWrapper('models/decom.tar', 'models/relight.tar').to(device)
+    retinexnet = RetinexNetWrapper(decom_path, relight_path).to(device)
 
     birefnet = AutoModelForImageSegmentation.from_pretrained('modelscope/BiRefNet', trust_remote_code=True)
     torch.set_float32_matmul_precision('high')
@@ -356,30 +348,26 @@ def main():
     birefnet.eval()
     birefnet.half()
 
-    esrgan4plus = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=2)
-
-    upsampler = RealESRGANer(
-        scale=1,
-        model_path='models/RealESRGAN_x2plus_mtg_v1.pth',
-        dni_weight=None,
-        model=esrgan4plus,
-        tile=0,
-        tile_pad=10,
-        pre_pad=0,
-        half=False,
-        gpu_id=None)
+    try:
+        psd_main = PSDImage.open(args.output)
+    except Exception as e:
+        psd_main = PSDImage.new(mode='RGBA', size=(1000, 1000))
 
     group_name = os.path.basename(os.path.normpath(args.folder))
+    if args.style:
+        group_name += '_' + os.path.basename(os.path.normpath(args.style))
+        group_name += '_' + str(args.nst_force)
     group = Group.new(group_name, open_folder=False, parent=psd_main)
     for filename in os.listdir(args.folder):
         image_path = os.path.join(args.folder, filename)
-        process_image(image_path, args.max_width, args.max_height, nst, group, args.edgepreservingfilter_sigma_s, args.shades, retinexnet, birefnet, upsampler)
+        process_image(image_path, args.max_width, args.max_height, nst, group, retinexnet, birefnet, upsampler)
 
-    add_max_size_layer(group, args.max_width, args.max_height)
+    add_max_size_layer(group, args.max_width, args.max_height, style_image)
 
     print('packing...')
     pack_psd(group)
 
+    print('saving...')
     psd_main.save(args.output)
 
 if __name__ == "__main__":

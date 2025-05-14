@@ -35,7 +35,7 @@ Congrats! You get packed spritesheet and UV coordinates in .txt
 
 #### sp_group
 
-`sp_group folder_name/ --style STYLE_IMAGE -W MAX_WIDTH -H MAX_HEIGHT -f STYLE_FORCE -b BLUR -s SHADOW_INCREASE -o OUTPUT_PSD`
+`sp_group folder_name/ --style STYLE_IMAGE -W MAX_WIDTH -H MAX_HEIGHT -f STYLE_FORCE -o OUTPUT_PSD`
 
 Creates PSD file containing group `folder_name` where each layer is a processed image with the specified maximum dimensions.
 
