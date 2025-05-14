@@ -337,7 +337,7 @@ def main():
     nst = None
     if args.style:
         style_image, _ = load_image(args.style)
-        style_image, _ = upsampler.enhance(style_image)
+        #style_image, _ = upsampler.enhance(style_image)
         nst = NST_VGG19_AdaIN(style_image, args.nst_force)
 
     retinexnet = RetinexNetWrapper(decom_path, relight_path).to(device)
