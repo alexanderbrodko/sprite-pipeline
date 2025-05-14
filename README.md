@@ -54,4 +54,5 @@ For each group in PSD creates packed spritesheet image and UV coordinates file n
 5. OpenCV to other filters and algorithms
 
 
-![preview](https://github.com/user-attachments/assets/9b7bc898-84c9-47a4-b823-870315449a11)
+![output](https://github.com/user-attachments/assets/e10aedcc-0cd9-47e3-ac60-e1d426b30cc0)
+
