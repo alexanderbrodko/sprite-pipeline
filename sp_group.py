@@ -101,8 +101,8 @@ class RetinexNetWrapper(nn.Module):
         self.load_weights(decom_net_path, relight_net_path)
 
     def load_weights(self, decom_net_path, relight_net_path):
-        self.decom_net.load_state_dict(torch.load(decom_net_path))
-        self.relight_net.load_state_dict(torch.load(relight_net_path))
+        self.decom_net.load_state_dict(torch.load(decom_net_path, map_location=device))
+        self.relight_net.load_state_dict(torch.load(relight_net_path, map_location=device))
         self.decom_net.eval()
         self.relight_net.eval()
 
