@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="sprite-pipeline",
-    version="0.2.2",
+    version="0.2.3",
     author="Alexander Brodko",
     description="A pipeline for converting images into stylized game sprites and sprite sheet generation.",
     long_description=open("README.md").read(),
@@ -24,7 +24,10 @@ setup(
         "basicsr",
         "realesrgan",
         "nst_vgg19>=0.1.9",
-        "gdown"
+        "gdown",
+        "einops",
+        "kornia",
+        "timm"
     ],
     package_data={
         'sp_group': ['models/*'],

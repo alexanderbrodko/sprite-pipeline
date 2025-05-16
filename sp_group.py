@@ -162,7 +162,7 @@ def extract_foreground_mask(image_np, model):
     
     # Масштабирование изображения до целевого размера
     resized_image_np = cv2.resize(image_np, image_size, interpolation=cv2.INTER_LANCZOS4)
-    input_tensor = transform_image(resized_image_np).unsqueeze(0).to('cuda').half()
+    input_tensor = transform_image(resized_image_np).unsqueeze(0).to(device).half()
 
     # Получение предсказаний модели
     with torch.no_grad():
