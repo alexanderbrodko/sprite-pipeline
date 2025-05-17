@@ -39,7 +39,6 @@ else:
 print('running on', device)
 torch.set_float32_matmul_precision('high')
 
-
 # Создание модели RetinexNet
 class DecomNet(nn.Module):
     def __init__(self, channel=64, kernel_size=3):
@@ -414,14 +413,20 @@ def main():
             sprites = extract_sprites(image_path, args.max_width * 2, args.max_height * 2, birefnet)
 
             base_name = os.path.splitext(os.path.basename(image_path))[0]
-            print(base_name + ': ' + str(len(sprites)))
+            if len(sprites) == 1:
+                print(base_name)
+            else:
+                print(base_name + ': ' + str(len(sprites)))
 
             for i, rgba in enumerate(sprites):
                 original = rgba[:, :, :3]     # RGB-каналы
                 mask = rgba[:, :, 3]
                 image = process_sprite(original, mask, nst, retinexnet, upsampler)
 
-                layer = PixelLayer.frompil(image, psd_main, base_name + '_' + str(i), 0, 0, Compression.RAW)
+                name = base_name
+                if i > 0:
+                    name += '_' + str(i + 1)
+                layer = PixelLayer.frompil(image, psd_main, name, 0, 0, Compression.RAW)
                 group.append(layer)
         except Exception as e:
             continue
