@@ -215,78 +215,80 @@ def get_nonzero_bbox(mask, padding=1):
 
     return x_min, y_min, x_max + 1, y_max + 1  # x1, y1, x2, y2
 
+class NotAnImageException(Exception):
+    pass
+
 def extract_sprites(img_path, max_width=2048, max_height=2048, birefnet=None):
     if not os.path.exists(img_path):
         raise FileNotFoundError(f"Not found: {img_path}")
 
     try:
         pil_image = Image.open(img_path).convert("RGBA")
-
-        rgba = np.array(pil_image)  # Shape: (H, W, 4)
-        original = rgba[:, :, :3]   # RGB
-        alpha = rgba[:, :, 3]       # Alpha channel
-
-        mask = None
-        if np.any(alpha < 255):
-            mask = alpha.copy()
-        else:
-            mask = extract_foreground_mask_birefnet(original, birefnet)
-            if mask is None:
-                print("^can not find foreground")
-                mask = np.ones_like(alpha, dtype=np.uint8) * 255
-            else:
-                mask = cv2.resize(mask, (alpha.shape[1], alpha.shape[0]), interpolation=cv2.INTER_LANCZOS4)
-
-        # Создаем полное RGBA изображение с маской
-        rgba_combined = rgba.copy()
-        if mask is not None:
-            rgba_combined[:, :, 3] = mask
-
-        # Получаем размеры изображения
-        height, width = rgba_combined.shape[:2]
-
-        # Ищем связные компоненты по маске (альфа канал)
-        alpha_mask = rgba_combined[:, :, 3]
-        _, labels, stats, _ = cv2.connectedComponentsWithStats(
-            (alpha_mask > 0).astype(np.uint8), connectivity=8
-        )
-
-        sprites = []
-
-        for stat in stats[1:]:  # Пропускаем фон (статистика индекса 0)
-            x, y, w, h, area = stat
-            if area < 10:  # Фильтруем слишком маленькие области
-                continue
-
-            if h < 4 or w < 4:  # Если сторона меньше 4 — пропускаем
-                continue
-
-            x1, y1 = x, y
-            x2, y2 = x + w, y + h
-
-            # Добавляем 1 пиксель границы
-            padding = 1
-            x1 = max(x1 - padding, 0)
-            y1 = max(y1 - padding, 0)
-            x2 = min(x2 + padding, width)
-            y2 = min(y2 + padding, height)
-
-            # Вырезаем спрайт (включая альфу)
-            sprite_rgba = rgba_combined[y1:y2, x1:x2]
-
-            # Ресайз под max размеры
-            h_sprite, w_sprite = sprite_rgba.shape[:2]
-            new_w, new_h = get_max_size(w_sprite, h_sprite, max_width, max_height)
-
-            if w_sprite != new_w or h_sprite != new_h:
-                sprite_rgba = cv2.resize(sprite_rgba, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
-
-            sprites.append(sprite_rgba)
-
-        return sprites
-
     except Exception as e:
-        raise ValueError(f"Can not load: {img_path}") from e
+        raise NotAnImageException(f"Can not load: {img_path}") from e
+
+    rgba = np.array(pil_image)  # Shape: (H, W, 4)
+    original = rgba[:, :, :3]   # RGB
+    alpha = rgba[:, :, 3]       # Alpha channel
+
+    mask = None
+    if np.any(alpha < 255):
+        mask = alpha.copy()
+    else:
+        mask = extract_foreground_mask_birefnet(original, birefnet)
+        if mask is None:
+            print("^can not find foreground")
+            mask = np.ones_like(alpha, dtype=np.uint8) * 255
+        else:
+            mask = cv2.resize(mask, (alpha.shape[1], alpha.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+
+    # Создаем полное RGBA изображение с маской
+    rgba_combined = rgba.copy()
+    if mask is not None:
+        rgba_combined[:, :, 3] = mask
+
+    # Получаем размеры изображения
+    height, width = rgba_combined.shape[:2]
+
+    # Ищем связные компоненты по маске (альфа канал)
+    alpha_mask = rgba_combined[:, :, 3]
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (alpha_mask > 0).astype(np.uint8), connectivity=8
+    )
+
+    sprites = []
+
+    for stat in stats[1:]:  # Пропускаем фон (статистика индекса 0)
+        x, y, w, h, area = stat
+        if area < 10:  # Фильтруем слишком маленькие области
+            continue
+
+        if h < 4 or w < 4:  # Если сторона меньше 4 — пропускаем
+            continue
+
+        x1, y1 = x, y
+        x2, y2 = x + w, y + h
+
+        # Добавляем 1 пиксель границы
+        padding = 1
+        x1 = max(x1 - padding, 0)
+        y1 = max(y1 - padding, 0)
+        x2 = min(x2 + padding, width)
+        y2 = min(y2 + padding, height)
+
+        # Вырезаем спрайт (включая альфу)
+        sprite_rgba = rgba_combined[y1:y2, x1:x2]
+
+        # Ресайз под max размеры
+        h_sprite, w_sprite = sprite_rgba.shape[:2]
+        new_w, new_h = get_max_size(w_sprite, h_sprite, max_width, max_height)
+
+        if w_sprite != new_w or h_sprite != new_h:
+            sprite_rgba = cv2.resize(sprite_rgba, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+
+        sprites.append(sprite_rgba)
+
+    return sprites
 
 def apply_mask(image_np, mask_np):
     if mask_np.shape[:2] != image_np.shape[:2]:
@@ -428,7 +430,7 @@ def main():
                     name += '_' + str(i + 1)
                 layer = PixelLayer.frompil(image, psd_main, name, 0, 0, Compression.RAW)
                 group.append(layer)
-        except Exception as e:
+        except NotAnImageException as e:
             continue
 
     add_max_size_layer(group, args.max_width, args.max_height, style_image)
