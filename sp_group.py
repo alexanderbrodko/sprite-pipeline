@@ -3,7 +3,7 @@ import cv2
 import torch
 import torch.nn as nn
 import torchvision
-from torchvision import transforms, models
+from torchvision import transforms
 from nst_vgg19 import NST_VGG19_AdaIN
 from modelscope import AutoModelForImageSegmentation
 
@@ -29,7 +29,16 @@ from psd_tools.api.layers import Group, PixelLayer, Compression
 from PIL import Image
 from sp_pack import pack_psd
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.backends.mps.is_available():
+    device = torch.device("mps")
+elif torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+
+print('running on', device)
+torch.set_float32_matmul_precision('high')
+
 
 # Создание модели RetinexNet
 class DecomNet(nn.Module):
@@ -142,7 +151,7 @@ def flat_lights(image_np, model):
 
     return enhanced_image_np
 
-def extract_foreground_mask(image_np, model):
+def extract_foreground_mask_birefnet(image_np, model):
     """
     Извлекает маску переднего плана из изображения.
     
@@ -171,10 +180,6 @@ def extract_foreground_mask(image_np, model):
     # Преобразование предсказания в маску
     pred = preds[0].squeeze().numpy()  # Тензор -> Numpy-массив
     mask = (pred * 255).clip(0, 255).astype(np.uint8)  # Нормализация в [0, 255]
-    
-    # Масштабирование маски обратно к исходному размеру изображения
-    original_height, original_width = image_np.shape[:2]
-    mask = cv2.resize(mask, (original_width, original_height), interpolation=cv2.INTER_LANCZOS4)
     
     return mask
 
@@ -265,19 +270,26 @@ def process_image(img_path, max_width, max_height, nst, psd, retinexnet=None, bi
         original, mask = load_image(img_path, max_width * 2, max_height * 2)
     except Exception as e:
         return
+
+    height, width = original.shape[:2]
     
     base_name = os.path.splitext(os.path.basename(img_path))[0]
 
     corrected = flat_lights(original, retinexnet)
 
     if nst is not None:
-        height, width = original.shape[:2]
         corrected, _ = refiner.enhance(corrected)
         corrected = nst(corrected)
         corrected = cv2.resize(corrected, (width, height), interpolation=cv2.INTER_LANCZOS4)
 
     if mask is None:
-        mask = extract_foreground_mask(original, birefnet)
+        mask = extract_foreground_mask_birefnet(original, birefnet)
+
+        if mask is None:
+            print("^can not find foreground")
+            mask = np.ones((height, width), dtype=np.uint8) * 255
+        else:
+            mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_LANCZOS4)
 
     corrected_rgba = apply_mask(corrected, mask)
 
@@ -285,12 +297,8 @@ def process_image(img_path, max_width, max_height, nst, psd, retinexnet=None, bi
     height, width = corrected.shape[:2]
     image = image.resize((width // 2, height // 2), Image.LANCZOS)
 
-    bbox = image.getbbox()  # Получаем ограничивающую рамку
-    if bbox is not None:  # Если есть непрозрачные пиксели
-        cropped_image = image.crop(bbox)  # Обрезаем изображение
-    else:
-        print("^can not find foreground")
-        return
+    bbox = image.getbbox()
+    cropped_image = image.crop(bbox)
 
     root = psd
     while root.parent:
@@ -337,16 +345,15 @@ def main():
     nst = None
     if args.style:
         style_image, _ = load_image(args.style)
-        #style_image, _ = upsampler.enhance(style_image)
         nst = NST_VGG19_AdaIN(style_image, args.nst_force)
 
     retinexnet = RetinexNetWrapper(decom_path, relight_path).to(device)
 
+    if device == torch.device('cpu'):
+        print('Warning: torch device is CPU so foreground extraction is ultra slow.')
+
     birefnet = AutoModelForImageSegmentation.from_pretrained('modelscope/BiRefNet', trust_remote_code=True)
-    torch.set_float32_matmul_precision('high')
-    birefnet.to(device)
-    birefnet.eval()
-    birefnet.half()
+    birefnet.to(device).eval().half()
 
     try:
         psd_main = PSDImage.open(args.output)
