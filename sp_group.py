@@ -29,9 +29,7 @@ from psd_tools.api.layers import Group, PixelLayer, Compression
 from PIL import Image
 from sp_pack import pack_psd
 
-if torch.backends.mps.is_available():
-    device = torch.device("mps")
-elif torch.cuda.is_available():
+if torch.cuda.is_available():
     device = torch.device("cuda")
 else:
     device = torch.device("cpu")
