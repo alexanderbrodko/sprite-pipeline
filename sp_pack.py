@@ -24,7 +24,7 @@ def process_layers(psd):
         cropped_image = image.crop(bbox)
         
         # Шаг 2: Добавляем рамку в 1 прозрачный пиксель
-        bordered_image = ImageOps.expand(cropped_image, border=1, fill=(0, 0, 0, 0))
+        bordered_image = ImageOps.expand(cropped_image, border=10, fill=(255,255,255, 0))
         
         # Сохраняем информацию о слое
         layers_info.append({
@@ -135,10 +135,10 @@ def create_uv_file(psd, width, height, path):
         layer_names.append(layer.name)
         
         # Вычисляем UV-координаты
-        u0 = layer.left / width
-        v0 = layer.top / height
-        u1 = layer.right / width
-        v1 = layer.bottom / height
+        u0 = layer.left
+        v0 = layer.top
+        u1 = layer.right
+        v1 = layer.bottom
         
         # Добавляем UV-координаты в список
         uv_coordinates.extend([
@@ -164,7 +164,7 @@ def main():
     args = parser.parse_args()
 
     psd_main = PSDImage.open(args.psd)
-
+    
     for group in psd_main:
         if not group.is_group():
             continue
@@ -175,8 +175,8 @@ def main():
         if bbox is None:
             continue
         cropped_image = image.crop(bbox)
-        image = ImageOps.expand(cropped_image, border=1, fill=(0, 0, 0, 0))
-
+        image = ImageOps.expand(cropped_image, border=10, fill=(255,255,255, 0))
+        
         png_path = os.path.join(args.output_dir, group.name + '.' + args.format)
         image.save(png_path)
         txt_path = os.path.join(args.output_dir, group.name + '_uv.txt')

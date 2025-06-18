@@ -4,23 +4,7 @@ import torch
 import torch.nn as nn
 import torchvision
 from torchvision import transforms
-from nst_vgg19 import NST_VGG19_AdaIN
 from modelscope import AutoModelForImageSegmentation
-
-import sys
-# Hack to fix a changed import in torchvision 0.17+, which otherwise breaks
-# basicsr; see https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/13985
-try:
-    import torchvision.transforms.functional_tensor
-except ImportError:
-    try:
-        import torchvision.transforms.functional as functional
-        sys.modules["torchvision.transforms.functional_tensor"] = functional
-    except ImportError:
-        pass  # shrug...
-
-from basicsr.archs.rrdbnet_arch import RRDBNet
-from realesrgan import RealESRGANer
 import gdown
 import os
 import argparse
@@ -28,6 +12,8 @@ from psd_tools import PSDImage
 from psd_tools.api.layers import Group, PixelLayer, Compression
 from PIL import Image
 from sp_pack import pack_psd
+from tqdm import tqdm
+from retinex import msrcr
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -136,7 +122,7 @@ def flat_lights(image_np, model):
         output_tensor = output_tensor.squeeze(0)
         output_array = output_tensor.detach().cpu().numpy()
         output_array = np.transpose(output_array, (1, 2, 0))
-        output_array = np.clip(output_array * 255.0, 0, 255).astype(np.uint8)
+        output_array = (output_array * 255.0).astype(np.uint8)
         return output_array
 
     input_tensor = preprocess_image(image_np).to(device)
@@ -180,79 +166,25 @@ def extract_foreground_mask_birefnet(image_np, model):
     
     return mask
 
-def get_max_size(w, h, max_w, max_h):
+def fit_size(w, h, max_w, max_h):
     scale_w = max_w / w
     scale_h = max_h / h
     scale = min(scale_w, scale_h, 1.0)
     return int(w * scale), int(h * scale)
 
-def get_nonzero_bbox(mask, padding=1):
-    """
-    Возвращает координаты bounding box вокруг ненулевых пикселей в маске:
-    (x_min, y_min, x_max, y_max)
+def extract_sprites(rgba: np.ndarray, max_width=2048, max_height=2048, segmenter=None):
+    mask = rgba[:, :, 3]
+    if np.all(mask == 255):
+        mask = segmenter(rgba[:,:,:3])
+        mask = cv2.resize(mask, (rgba.shape[1], rgba.shape[0]), interpolation=cv2.INTER_LANCZOS4)
     
-    padding: количество пикселей для добавления с каждой стороны
-    """
-    if mask is None:
-        return None
-
-    rows = np.any(mask, axis=1)
-    cols = np.any(mask, axis=0)
-
-    if not np.any(rows) or not np.any(cols):
-        return None  # Пустая маска
-
-    y_min, y_max = np.where(rows)[0][[0, -1]]
-    x_min, x_max = np.where(cols)[0][[0, -1]]
-
-    # Добавляем padding
-    x_min = max(x_min - padding, 0)
-    y_min = max(y_min - padding, 0)
-    x_max = min(x_max + padding, mask.shape[1] - 1)
-    y_max = min(y_max + padding, mask.shape[0] - 1)
-
-    return x_min, y_min, x_max + 1, y_max + 1  # x1, y1, x2, y2
-
-class NotAnImageException(Exception):
-    pass
-
-def extract_sprites(img_path, max_width=2048, max_height=2048, birefnet=None):
-    if not os.path.exists(img_path):
-        raise FileNotFoundError(f"Not found: {img_path}")
-
-    try:
-        pil_image = Image.open(img_path).convert("RGBA")
-    except Exception as e:
-        raise NotAnImageException(f"Can not load: {img_path}") from e
-
-    rgba = np.array(pil_image)  # Shape: (H, W, 4)
-    original = rgba[:, :, :3]   # RGB
-    alpha = rgba[:, :, 3]       # Alpha channel
-
-    mask = None
-    if np.any(alpha < 255):
-        mask = alpha.copy()
-    else:
-        mask = extract_foreground_mask_birefnet(original, birefnet)
-        if mask is None:
-            print("^can not find foreground")
-            mask = np.ones_like(alpha, dtype=np.uint8) * 255
-        else:
-            mask = cv2.resize(mask, (alpha.shape[1], alpha.shape[0]), interpolation=cv2.INTER_LANCZOS4)
-
-    # Создаем полное RGBA изображение с маской
-    rgba_combined = rgba.copy()
     if mask is not None:
-        rgba_combined[:, :, 3] = mask
+        rgba[:, :, 3] = mask
+    
+    if np.all(mask == 255):
+        return [rgba]
 
-    # Получаем размеры изображения
-    height, width = rgba_combined.shape[:2]
-
-    # Ищем связные компоненты по маске (альфа канал)
-    alpha_mask = rgba_combined[:, :, 3]
-    _, labels, stats, _ = cv2.connectedComponentsWithStats(
-        (alpha_mask > 0).astype(np.uint8), connectivity=8
-    )
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
 
     sprites = []
 
@@ -264,22 +196,10 @@ def extract_sprites(img_path, max_width=2048, max_height=2048, birefnet=None):
         if h < 4 or w < 4:  # Если сторона меньше 4 — пропускаем
             continue
 
-        x1, y1 = x, y
-        x2, y2 = x + w, y + h
+        sprite_rgba = rgba[y:y+h, x:x+w]
 
-        # Добавляем 1 пиксель границы
-        padding = 1
-        x1 = max(x1 - padding, 0)
-        y1 = max(y1 - padding, 0)
-        x2 = min(x2 + padding, width)
-        y2 = min(y2 + padding, height)
-
-        # Вырезаем спрайт (включая альфу)
-        sprite_rgba = rgba_combined[y1:y2, x1:x2]
-
-        # Ресайз под max размеры
         h_sprite, w_sprite = sprite_rgba.shape[:2]
-        new_w, new_h = get_max_size(w_sprite, h_sprite, max_width, max_height)
+        new_w, new_h = fit_size(w_sprite, h_sprite, max_width, max_height)
 
         if w_sprite != new_w or h_sprite != new_h:
             sprite_rgba = cv2.resize(sprite_rgba, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
@@ -288,72 +208,30 @@ def extract_sprites(img_path, max_width=2048, max_height=2048, birefnet=None):
 
     return sprites
 
-def apply_mask(image_np, mask_np):
-    if mask_np.shape[:2] != image_np.shape[:2]:
-        raise ValueError("Image and mask size must be the same.")
+def new_layer(group, rgba, psd, name, retinexnet, save):
+    original = rgba[:, :, :3]
+    mask = rgba[:, :, 3]
     
-    # Если маска одноканальная (grayscale), добавляем канал
-    if len(mask_np.shape) == 2:
-        mask_np = np.expand_dims(mask_np, axis=2)  # (H, W) -> (H, W, 1)
+    result_retinexnet = flat_lights(original, retinexnet).astype(np.float32) # noisy
+    result_msrcr = msrcr(original, sigmas=(7., 20., 60.,)).astype(np.float32) # overbrighten
+    original = original.astype(np.float32)
+    corrected = (original * 0.4 + result_retinexnet * 0.3 + result_msrcr * 0.3).astype(np.uint8)
     
-    # Добавляем альфа-канал к изображению
-    if image_np.shape[2] == 3:  # Если изображение RGB
-        image_with_alpha = np.concatenate(
-            [image_np, mask_np], axis=2
-        ).astype(np.uint8)
-    else:
-        raise ValueError("Image must be RGB (H, W, 3).")
+    rgba = np.dstack([corrected, mask])
+
+    image = Image.fromarray(rgba, mode="RGBA")
     
-    return image_with_alpha
-
-def add_max_size_layer(psd, max_width, max_height, source_image_np):
-    for layer in psd:
-        if layer.name == 'max_size':
-            return
-
-    source_image = Image.fromarray(source_image_np)
-
-    img_width, img_height = source_image.size
-
-    left = (img_width - max_width) // 2
-    top = (img_height - max_height) // 2
-    right = left + max_width
-    bottom = top + max_height
-
-    cropped_image = source_image.crop((left, top, right, bottom))
-
-    root = psd
-    while root.parent:
-        root = root.parent
-
-    new_layer = PixelLayer.frompil(cropped_image, root, 'max_size', 0, 0, Compression.RAW)
-    psd.append(new_layer)
-
-def process_sprite(original, mask, nst, retinexnet=None, refiner=None):
-    height, width = original.shape[:2]
+    if save:
+        image.save(os.path.join('debug', name + '.png'))
     
-    corrected = flat_lights(original, retinexnet)
-
-    if nst is not None:
-        corrected, _ = refiner.enhance(corrected)
-        corrected = nst(corrected)
-        corrected = cv2.resize(corrected, (width, height), interpolation=cv2.INTER_LANCZOS4)
-
-    corrected_rgba = apply_mask(corrected, mask)
-
-    image = Image.fromarray(corrected_rgba, mode="RGBA")
-    height, width = corrected.shape[:2]
-    image = image.resize((width // 2, height // 2), Image.LANCZOS)
-
-    return image
+    layer = PixelLayer.frompil(image, psd, name, 0, 0, Compression.RAW)
+    group.append(layer)
 
 def main():
     model_dir = os.path.expanduser('~/.cache/sprite-pipeline/')
-    realesrgan_path = os.path.join(model_dir,'models/RealESRGAN_x2plus_mtg_v1.pth')
     decom_path = os.path.join(model_dir, 'models/decom.tar')
     relight_path = os.path.join(model_dir, 'models/relight.tar')
     if not (
-        os.path.isfile(realesrgan_path) or
         os.path.isfile(decom_path) or
         os.path.isfile(relight_path)
     ):
@@ -362,31 +240,11 @@ def main():
 
     parser = argparse.ArgumentParser(description="Make PSD group from folder with sprites.")
     parser.add_argument("folder", help="Path to folder with images.")
-    parser.add_argument("-s", "--style", required=False, help="Path to the style image.")
     parser.add_argument("-W", "--max_width", type=int, default=480, help="Max sprite width.")
     parser.add_argument("-H", "--max_height", type=int, default=480, help="Max sprite height.")
-    parser.add_argument("-f", "--nst_force", type=float, default=1, help="Neural style transfer - weights mul.")
     parser.add_argument("-o", "--output", default="output.psd", help="Output PSD name.")
+    parser.add_argument("--debug", action="store_true", help="Output each sprite in ./debug/.")
     args = parser.parse_args()
-
-    esrgan2plus = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=2)
-
-    upsampler = RealESRGANer(
-        scale=1,
-        model_path=realesrgan_path,
-        dni_weight=None,
-        model=esrgan2plus,
-        tile=0,
-        tile_pad=0,
-        pre_pad=0,
-        half=False,
-        gpu_id=None)
-
-    nst = None
-    if args.style:
-        pil_image = Image.open(args.style).convert("RGB")
-        style_image = np.array(pil_image)
-        nst = NST_VGG19_AdaIN(style_image, args.nst_force)
 
     retinexnet = RetinexNetWrapper(decom_path, relight_path).to(device)
 
@@ -395,43 +253,47 @@ def main():
 
     birefnet = AutoModelForImageSegmentation.from_pretrained('modelscope/BiRefNet', trust_remote_code=True)
     birefnet.to(device).eval().half()
+    segmenter = lambda image_np: extract_foreground_mask_birefnet(image_np, birefnet)
 
     try:
         psd_main = PSDImage.open(args.output)
     except Exception as e:
         psd_main = PSDImage.new(mode='RGBA', size=(1000, 1000))
 
+    if args.debug:
+        if os.path.exists('debug'):
+            for filename in os.listdir('debug'):
+                os.remove(os.path.join('debug', filename))
+        os.makedirs('debug', exist_ok=True)
+    
+    progress_bar = tqdm(total=len(os.listdir(args.folder)), desc='extract')
+
     group_name = os.path.basename(os.path.normpath(args.folder))
-    if args.style:
-        group_name += '_' + os.path.basename(os.path.normpath(args.style))
-        group_name += '_' + str(args.nst_force)
+    
+    for layer in psd_main:
+        if layer.name == group_name:
+            psd_main.remove(layer)
+            break
+    
     group = Group.new(group_name, open_folder=False, parent=psd_main)
     for filename in os.listdir(args.folder):
+        progress_bar.update()
         image_path = os.path.join(args.folder, filename)
 
-        try:
-            sprites = extract_sprites(image_path, args.max_width * 2, args.max_height * 2, birefnet)
+        rgba = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
+        rgba = cv2.cvtColor(rgba, cv2.COLOR_BGRA2RGBA)
+            
+        sprites = extract_sprites(rgba, args.max_width, args.max_height, segmenter)
 
-            base_name = os.path.splitext(os.path.basename(image_path))[0]
-            if len(sprites) == 1:
-                print(base_name)
-            else:
-                print(base_name + ': ' + str(len(sprites)))
+        base_name = os.path.splitext(os.path.basename(image_path))[0]
 
-            for i, rgba in enumerate(sprites):
-                original = rgba[:, :, :3]     # RGB-каналы
-                mask = rgba[:, :, 3]
-                image = process_sprite(original, mask, nst, retinexnet, upsampler)
-
-                name = base_name
-                if i > 0:
-                    name += '_' + str(i + 1)
-                layer = PixelLayer.frompil(image, psd_main, name, 0, 0, Compression.RAW)
-                group.append(layer)
-        except NotAnImageException as e:
-            continue
-
-    add_max_size_layer(group, args.max_width, args.max_height, style_image)
+        for i, rgba in enumerate(sprites):
+            name = base_name
+            if i > 0:
+                name += '_' + str(i + 1)
+            new_layer(group, rgba, psd_main, name, retinexnet, args.debug)
+            
+    progress_bar.close()
 
     print('packing...')
     pack_psd(group)
@@ -441,3 +303,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    

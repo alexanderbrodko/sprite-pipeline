@@ -1,34 +1,19 @@
 from setuptools import setup, find_packages
 
+def read_requirements():
+    with open('requirements.txt', encoding="utf-8") as req_file:
+        return [line.strip() for line in req_file if not line.startswith('#') and line.strip()]
+
 setup(
     name="sprite-pipeline",
-    version="0.2.7",
+    version="0.2.8",
     author="Alexander Brodko",
     description="A pipeline for converting images into stylized game sprites and sprite sheet generation.",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/alexanderbrodko/sprite-pipeline",
     py_modules=["sp_group", "sp_pack"],
-    install_requires=[
-        "numpy",
-        "opencv-python",
-        "torch",
-        "torchvision",
-        "Pillow",
-        "psd-tools",
-        "rectpack",
-        "modelscope",
-        "transformers",
-        "diffusers",
-        "retinex",
-        "basicsr",
-        "realesrgan",
-        "nst_vgg19>=0.1.9",
-        "gdown",
-        "einops",
-        "kornia",
-        "timm"
-    ],
+    install_requires=read_requirements(),
     package_data={
         'sp_group': ['models/*'],
     },
