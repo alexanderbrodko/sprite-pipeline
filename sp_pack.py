@@ -4,7 +4,10 @@ from psd_tools.constants import BlendMode
 from rectpack import newPacker
 from PIL import Image, ImageOps
 import argparse
+import numpy as np
+import cv2
 import os
+import json
 
 def process_layers(psd):
     layers_info = []
@@ -109,65 +112,141 @@ def pack_psd(psd):
     
     # Если слои не влезли, увеличиваем минимальную сторону холста в 2 раза
     while not all_fitted:
-        print('repack')
         if canvas_size[1] < canvas_size[0]:
             canvas_size[1] *= 2
         else:
             canvas_size[0] *= 2
+        print('repack to', canvas_size)
         packer, all_fitted = pack_layers(layers_info, canvas_size)
     
     repack_layers(psd, packer, layers_info)
 
-def create_uv_file(psd, width, height, path):
-    """
-    Создает файл uv.txt с именами всех слоев и их UV-координатами.
-    
-    :param psd: Исходный PSD-файл.
-    """
-    layer_names = []  # Список для хранения имен слоев
-    uv_coordinates = []  # Список для хранения UV-координат
+def create_uv_json(psd, width, height, output_path):
+    data = {}
     
     for layer in psd:
         if layer.is_group():
-            continue  # Пропускаем группы слоев
+            continue
         
-        # Сохраняем имя слоя
-        layer_names.append(layer.name)
-        
-        # Вычисляем UV-координаты
-        u0 = layer.left
-        v0 = layer.top
-        u1 = layer.right
-        v1 = layer.bottom
-        
-        # Добавляем UV-координаты в список
-        uv_coordinates.extend([
-            u0, v0,  # Левый верхний угол
-            u1, v0,  # Правый верхний угол
-            u1, v1,  # Правый нижний угол
-            u0, v1   # Левый нижний угол
-        ])
+        data[layer.name] = {}
+
+        data[layer.name]['left'] = layer.left
+        data[layer.name]['top'] = layer.top
+        data[layer.name]['right'] = layer.right
+        data[layer.name]['bottom'] = layer.bottom
     
-    # Создаем файл uv.txt
-    with open(path, "w") as uv_file:
-        # Первая строка: имена слоев через запятую
-        uv_file.write(",".join(layer_names) + "\n")
-        
-        # Вторая строка: UV-координаты через запятую
-        uv_file.write(",".join(map(str, uv_coordinates)) + "\n")
+    # Сохраняем в JSON-файл
+    with open(output_path, 'w') as f:
+        json.dump(data, f)
+
+def makeShadow(
+    image_np,
+    radius=50,
+    smooth=3,
+    scale=0.1,
+    color=(0.04, 0.03, 0.06),
+    noise_level=0.05,
+    intensity=0.3
+):
+    if image_np.shape[2] != 4:
+        raise ValueError("Изображение должно быть в формате RGBA")
+
+    h, w = image_np.shape[:2]
+
+    pad = radius * 2
+    image_padded = cv2.copyMakeBorder(
+        image_np,
+        pad, pad, pad, pad,
+        cv2.BORDER_CONSTANT,
+        value=(0, 0, 0, 0)
+    )
+
+    # Извлекаем альфа-канал
+    alpha_channel = image_padded[:, :, 3].astype(np.float32) / 255.0
+
+    # Размываем альфа-канал
+    blurred_alpha = cv2.GaussianBlur(alpha_channel, (radius * 2 + 1, radius * 2 + 1), radius)
+
+    # Применяем степенную функцию для изменения контраста
+    transformed_alpha = np.clip(blurred_alpha * smooth, 0, 1)
+    transformed_alpha = cv2.GaussianBlur(transformed_alpha, (radius * 2 + 1, radius * 2 + 1), radius)
+
+    # Масштабируем интенсивность тени
+    transformed_alpha *= intensity
+
+    shadow_alpha = (transformed_alpha * 255).astype(np.uint8)
+
+    # Создаём RGB-изображение с указанным цветом тени
+    shadow_rgb = np.zeros((image_padded.shape[0], image_padded.shape[1], 3), dtype=np.uint8)
+    shadow_rgb[:, :, :] = color  # Задаём цвет тени
+
+    # Добавляем шум (если указано)
+    if noise_level > 0.0:
+        noise = np.random.normal(0, noise_level, shadow_rgb.shape).astype(np.float32)
+        shadow_rgb = np.clip(shadow_rgb.astype(np.float32) / 255 + noise, 0, 1) * 255
+        shadow_rgb = shadow_rgb.astype(np.uint8)
+
+    # Накладываем альфа-канал на RGB
+    shadow_rgb = cv2.merge([shadow_rgb, shadow_alpha])
+
+    # Сжимаем изображение
+    new_size = (int(shadow_rgb.shape[1] * scale), int(shadow_rgb.shape[0] * scale))
+    shadow_scaled = cv2.resize(shadow_rgb, new_size, interpolation=cv2.INTER_AREA)
+
+    return shadow_scaled
+
+def add_shadow_layers(group, psd):
+    root = psd  # Корень PSD
+
+    shadow_layers = []
+
+    for layer in group:
+        if not layer.visible:  # Пропускаем невидимые слои
+            continue
+
+        img_np = np.array(layer.composite(force=True))
+
+        # Генерируем тень
+        shadow_np = makeShadow(img_np, radius=5, smooth=8, scale=0.5, intensity=0.66)
+
+        shadow_pil = Image.fromarray(shadow_np)
+
+        # Создаём новый слой тени и добавляем его в корень PSD
+        shadow_layer = PixelLayer.frompil(
+            shadow_pil,
+            root,
+            f"{layer.name}_shadow",
+            0, 0,
+            Compression.RAW
+        )
+        shadow_layers.append(shadow_layer)
+
+    for layer in shadow_layers:
+        group.append(layer)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Make spritesheets from PSD.")
     parser.add_argument("psd", nargs='?', default="output.psd", help="Path to your PSD with groups.")
     parser.add_argument("-o", "--output_dir", default='.', help="Output dir.")
     parser.add_argument("--format", default='png', help="Output image format.")
+    parser.add_argument("--gen_shadows", action="store_true", help="Generate shadows for sprites.")
+
     args = parser.parse_args()
 
     psd_main = PSDImage.open(args.psd)
-    
+
     for group in psd_main:
         if not group.is_group():
             continue
+
+        if args.gen_shadows:
+            print('gen shadows for', group.name + '... ', end="")
+            add_shadow_layers(group, psd_main)
+            print('done')
+
+        layers_info = process_layers(group)
+
         pack_psd(group)
 
         image = group.composite(force=True)
@@ -179,8 +258,8 @@ def main():
         
         png_path = os.path.join(args.output_dir, group.name + '.' + args.format)
         image.save(png_path)
-        txt_path = os.path.join(args.output_dir, group.name + '_uv.txt')
-        create_uv_file(group, image.width, image.height, txt_path)
+        txt_path = os.path.join(args.output_dir, group.name + '_uv.json')
+        create_uv_json(group, image.width, image.height, txt_path)
 
 if __name__ == "__main__":
     main()
