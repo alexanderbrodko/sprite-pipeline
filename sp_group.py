@@ -226,7 +226,7 @@ def fit_size(w, h, max_w, max_h):
     scale = min(scale_w, scale_h, 1.0)
     return int(w * scale), int(h * scale)
 
-def extract_sprites(rgba: np.ndarray, max_width=2048, max_height=2048, segmenter=None):
+def extract_sprites(rgba: np.ndarray, segmenter=None):
     mask = rgba[:, :, 3]
     if np.all(mask == 255):
         mask = segmenter(rgba[:,:,:3])
@@ -251,37 +251,50 @@ def extract_sprites(rgba: np.ndarray, max_width=2048, max_height=2048, segmenter
             continue
 
         sprite_rgba = rgba[y:y+h, x:x+w]
-
-        h_sprite, w_sprite = sprite_rgba.shape[:2]
-        new_w, new_h = fit_size(w_sprite, h_sprite, max_width, max_height)
-
-        if w_sprite != new_w or h_sprite != new_h:
-            sprite_rgba = cv2.resize(sprite_rgba, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
-
         sprites.append(sprite_rgba)
 
     return sprites
 
-def new_layer(group, rgba, psd, name, retinexnet, save, resize_scale=None):
+def new_layer(group, rgba, psd, name, retinexnet, debug, max_width, max_height, resize_scale=None):
     original = rgba[:, :, :3]
     mask = rgba[:, :, 3]
     
-    result_retinexnet = flat_lights(original, retinexnet).astype(np.float32) # noisy
-    result_msrcr = msrcr(original, sigmas=(7., 20., 60.,)).astype(np.float32) # overbrighten
+    # сначала ресайз, потом фильтры
+    h, w = rgba.shape[:2]
+    
+    # Сначала применяем ограничение максимальных размеров
+    new_w, new_h = fit_size(w, h, max_width, max_height)
+    scale_fit = min(new_w / w, new_h / h)
+    
+    # Затем применяем правило из файла (если есть)
+    final_scale = scale_fit
+    if resize_scale is not None:
+        final_scale = final_scale * resize_scale
+    
+    # Применяем финальный ресайз
+    if final_scale != 1.0:
+        if debug and final_scale > 1.0:
+            print(f"WARNING: {name} upscaled {final_scale:.2f}x (original: {w}x{h})")
+
+        final_w = int(w * final_scale)
+        final_h = int(h * final_scale)
+        # Ресайзим и оригинал и маску
+        original = cv2.resize(original, (final_w, final_h), interpolation=cv2.INTER_LANCZOS4)
+        mask = cv2.resize(mask, (final_w, final_h), interpolation=cv2.INTER_LANCZOS4)
+        if debug:
+            print(f"Resized {name} with scale {final_scale:.2f} (fit: {scale_fit:.2f}, rule: {resize_scale if resize_scale else 1.0})")
+    
+    # фильтры применяем к уже ресайзнутому изображению
+    result_retinexnet = flat_lights(original, retinexnet).astype(np.float32)
+    result_msrcr = msrcr(original, sigmas=(7., 20., 60.,)).astype(np.float32)
     original = original.astype(np.float32)
     corrected = (original * 0.5 + result_retinexnet * 0.3 + result_msrcr * 0.2).astype(np.uint8)
     
     rgba = np.dstack([corrected, mask])
 
-    # Применяем ресайз если указан
-    if resize_scale is not None and resize_scale != 1.0:
-        rgba = resize_rgba(rgba, resize_scale)
-        if save:
-            print(f"Resized {name} with scale {resize_scale}")
-
     image = Image.fromarray(rgba, mode="RGBA")
     
-    if save:
+    if debug:
         image.save(os.path.join('debug', name + '.png'))
     
     layer = PixelLayer.frompil(image, psd, name, 0, 0, Compression.RAW)
@@ -360,19 +373,21 @@ def main():
 
         rgba = cv2.cvtColor(rgba, cv2.COLOR_BGRA2RGBA)
             
-        sprites = extract_sprites(rgba, args.max_width, args.max_height, segmenter)
+        sprites = extract_sprites(rgba, segmenter)  # убраны max_width, max_height
 
         base_name = os.path.splitext(os.path.basename(image_path))[0]
 
-        for i, rgba in enumerate(sprites):
+        for i, sprite_rgba in enumerate(sprites):
             name = base_name
             if i > 0:
                 name += '_' + str(i + 1)
             
-            # Получаем масштаб ресайза для этого слоя
             resize_scale = get_resize_scale(name, resize_rules) if resize_rules else None
             
-            new_layer(group, rgba, psd_main, name, retinexnet, args.debug, resize_scale)
+            # Передаем max_width, max_height в new_layer
+            new_layer(group, sprite_rgba, psd_main, name, retinexnet, args.debug, 
+                      args.max_width, args.max_height, resize_scale)
+
             
     progress_bar.close()
 
