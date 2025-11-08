@@ -190,10 +190,10 @@ def extract_sprites(rgba: np.ndarray, max_width=2048, max_height=2048, segmenter
 
     for stat in stats[1:]:  # Пропускаем фон (статистика индекса 0)
         x, y, w, h, area = stat
-        if area < 10:  # Фильтруем слишком маленькие области
+        if area < 100:  # Фильтруем слишком маленькие области
             continue
 
-        if h < 4 or w < 4:  # Если сторона меньше 4 — пропускаем
+        if h < 32 or w < 32:  # Если сторона меньше — пропускаем
             continue
 
         sprite_rgba = rgba[y:y+h, x:x+w]
@@ -215,7 +215,7 @@ def new_layer(group, rgba, psd, name, retinexnet, save):
     result_retinexnet = flat_lights(original, retinexnet).astype(np.float32) # noisy
     result_msrcr = msrcr(original, sigmas=(7., 20., 60.,)).astype(np.float32) # overbrighten
     original = original.astype(np.float32)
-    corrected = (original * 0.4 + result_retinexnet * 0.3 + result_msrcr * 0.3).astype(np.uint8)
+    corrected = (original * 0.5 + result_retinexnet * 0.3 + result_msrcr * 0.2).astype(np.uint8)
     
     rgba = np.dstack([corrected, mask])
 
@@ -281,6 +281,11 @@ def main():
         image_path = os.path.join(args.folder, filename)
 
         rgba = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
+
+        if rgba is None:
+            print('\rSkip', filename, ' - can not load')
+            continue
+
         rgba = cv2.cvtColor(rgba, cv2.COLOR_BGRA2RGBA)
             
         sprites = extract_sprites(rgba, args.max_width, args.max_height, segmenter)
