@@ -6,7 +6,7 @@ def read_requirements():
 
 setup(
     name="sprite-pipeline",
-    version="0.2.8",
+    version="0.3.0",
     author="Alexander Brodko",
     description="A pipeline for converting images into stylized game sprites and sprite sheet generation.",
     long_description=open("README.md").read(),
