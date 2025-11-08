@@ -1,0 +1,10 @@
+numpy
+opencv-python
+torch
+torchvision
+modelscope
+gdown
+psd-tools
+Pillow
+tqdm
+rectpack
