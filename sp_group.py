@@ -105,6 +105,60 @@ class RetinexNetWrapper(nn.Module):
         output_S = R_low * I_delta_3
         return output_S
 
+def load_resize_rules(sizes_path):
+    """
+    Загружает правила ресайза из файла
+    Формат: pattern scale
+    """
+    if not sizes_path or not os.path.exists(sizes_path):
+        return []
+    
+    rules = []
+    with open(sizes_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#'):
+                parts = line.split()
+                if len(parts) >= 2:
+                    pattern = parts[0]
+                    scale = float(parts[1])
+                    rules.append((pattern, scale))
+    return rules
+
+def layer_matches_pattern(layer_name, pattern):
+    """
+    Проверяет, подходит ли имя слоя под паттерн
+    Поддерживает * в конце как в примере
+    """
+    if pattern.endswith('*'):
+        return layer_name.startswith(pattern[:-1])
+    else:
+        return layer_name == pattern
+
+def get_resize_scale(layer_name, rules):
+    """
+    Возвращает масштаб ресайза для слоя по правилам
+    """
+    for pattern, scale in rules:
+        if layer_matches_pattern(layer_name, pattern):
+            return scale
+    return None
+
+def resize_rgba(rgba, scale):
+    """
+    Ресайзит RGBA массив с указанным масштабом
+    """
+    if scale is None or scale == 1.0:
+        return rgba
+    
+    h, w = rgba.shape[:2]
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    
+    # Ресайзим с тем же интерполятором, что и в основном коде
+    resized_rgba = cv2.resize(rgba, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+    return resized_rgba
+
 def flat_lights(image_np, model):
     """
     Применяет RetinexNet к изображению.
@@ -208,7 +262,7 @@ def extract_sprites(rgba: np.ndarray, max_width=2048, max_height=2048, segmenter
 
     return sprites
 
-def new_layer(group, rgba, psd, name, retinexnet, save):
+def new_layer(group, rgba, psd, name, retinexnet, save, resize_scale=None):
     original = rgba[:, :, :3]
     mask = rgba[:, :, 3]
     
@@ -218,6 +272,12 @@ def new_layer(group, rgba, psd, name, retinexnet, save):
     corrected = (original * 0.5 + result_retinexnet * 0.3 + result_msrcr * 0.2).astype(np.uint8)
     
     rgba = np.dstack([corrected, mask])
+
+    # Применяем ресайз если указан
+    if resize_scale is not None and resize_scale != 1.0:
+        rgba = resize_rgba(rgba, resize_scale)
+        if save:
+            print(f"Resized {name} with scale {resize_scale}")
 
     image = Image.fromarray(rgba, mode="RGBA")
     
@@ -243,8 +303,20 @@ def main():
     parser.add_argument("-W", "--max_width", type=int, default=480, help="Max sprite width.")
     parser.add_argument("-H", "--max_height", type=int, default=480, help="Max sprite height.")
     parser.add_argument("-o", "--output", default="output.psd", help="Output PSD name.")
+    parser.add_argument("--resizes", help="Path to resizes rules file. Per line: layer_name_mask scale_0_1")
     parser.add_argument("--debug", action="store_true", help="Output each sprite in ./debug/.")
     args = parser.parse_args()
+
+    # Загружаем правила ресайза если файл указан
+    resize_rules = []
+    if args.resizes:
+        resize_rules = load_resize_rules(args.resizes)
+        if resize_rules:
+            print(f"Loaded {len(resize_rules)} resize rules:")
+            for pattern, scale in resize_rules:
+                print(f"  {pattern} -> {scale}")
+        else:
+            print("No resize rules loaded or file not found")
 
     retinexnet = RetinexNetWrapper(decom_path, relight_path).to(device)
 
@@ -296,7 +368,11 @@ def main():
             name = base_name
             if i > 0:
                 name += '_' + str(i + 1)
-            new_layer(group, rgba, psd_main, name, retinexnet, args.debug)
+            
+            # Получаем масштаб ресайза для этого слоя
+            resize_scale = get_resize_scale(name, resize_rules) if resize_rules else None
+            
+            new_layer(group, rgba, psd_main, name, retinexnet, args.debug, resize_scale)
             
     progress_bar.close()
 
