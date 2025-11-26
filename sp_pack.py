@@ -1,160 +1,146 @@
 from psd_tools import PSDImage
 from psd_tools.api.layers import Group, PixelLayer, Compression
 from psd_tools.constants import BlendMode
-from rectpack import newPacker
+from rectpack import newPacker, MaxRectsBaf, SORT_AREA
 from PIL import Image, ImageOps
 import argparse
 import os
+import json  # Добавляем импорт json
 
-def process_layers(psd):
+def get_layers_info(psd, border=10):
     layers_info = []
     for layer in psd:
         if layer.is_group():
-            continue  # Пропускаем группы слоев
+            continue
         if not layer.visible:
-            continue  # Пропускаем невидимые слои
+            continue
 
-        # Преобразуем слой в изображение PIL
         image = layer.composite(force=True)
-
-        # Шаг 1: Обрезаем слой до содержимого
         bbox = image.getbbox()
         if bbox is None:
-            continue  # Пропускаем пустые слои
+            continue
+            
+        # Сохраняем смещение от обрезки
+        crop_left, crop_top, crop_right, crop_bottom = bbox
+        original_width, original_height = image.size
+        
         cropped_image = image.crop(bbox)
+        bordered_image = ImageOps.expand(cropped_image, border=border, fill=(255,255,255, 0))
         
-        # Шаг 2: Добавляем рамку в 1 прозрачный пиксель
-        bordered_image = ImageOps.expand(cropped_image, border=10, fill=(255,255,255, 0))
-        
-        # Сохраняем информацию о слое
         layers_info.append({
             "layer": layer,
             "name": layer.name,
             "image": bordered_image,
             "size": bordered_image.size,
+            "crop_offset": (crop_left, crop_top),  # Смещение обрезки
+            "original_size": (original_width, original_height),
+            "border": border
         })
 
     return layers_info
 
 def pack_layers(layers, canvas_size):
-    packer = newPacker(rotation=False)  # Запрещаем поворот
+    packer = newPacker(
+        rotation=False,
+        pack_algo=MaxRectsBaf,
+        sort_algo=SORT_AREA,
+    )
     
-    # Добавляем прямоугольники с уникальными идентификаторами
     for i, info in enumerate(layers):
-        packer.add_rect(*info["size"], rid=i)  # rid - уникальный идентификатор прямоугольника
+        packer.add_rect(*info["size"], rid=i)
     
-    packer.add_bin(*canvas_size)
     packer.add_bin(*canvas_size)
     packer.pack()
     
-    # Проверяем, все ли слои влезли
-    all_fitted = True
-    for rect in packer.rect_list():
-        b, x, y, w, h, rid = rect
-        if w == 0 or h == 0 or b != 0:
-            all_fitted = False
-            break
+    all_fitted = len(packer.rect_list()) == len(layers)
     
     return packer, all_fitted
 
+
 def repack_layers(psd, packer, layers_info):
-    # Создаем новые слои на основе упаковки
+    packed_layers_info = []  # Сохраняем информацию об упакованных слоях
+    
     for rect in packer.rect_list():
         b, x, y, w, h, rid = rect
-        layer_info = layers_info[rid]  # Используем идентификатор b для получения слоя
+        layer_info = layers_info[rid]
         old_layer = layer_info["layer"]
+
+        # Сохраняем информацию для UV
+        layer_info["atlas_x"] = x
+        layer_info["atlas_y"] = y
+        packed_layers_info.append(layer_info)
 
         root = psd
         while root.parent:
             root = root.parent
 
-        # Создаем новый слой из PIL-изображения
         new_layer = PixelLayer.frompil(
             layer_info["image"],
             root,
             layer_info["name"],
-            y,
-            x,
+            y,  # top
+            x,  # left
             Compression.RAW
         )
-        # Устанавливаем атрибуты нового слоя
-        new_layer.visible = True  # Убедитесь, что слой видим
-        new_layer.opacity = 255  # Полная непрозрачность
-        new_layer.blend_mode = BlendMode.NORMAL  # Режим наложения "normal"
+        
+        new_layer.visible = True
+        new_layer.opacity = 255
+        new_layer.blend_mode = BlendMode.NORMAL
 
-        # Находим индекс старого слоя
         try:
             index = psd.index(old_layer)
+            psd.remove(old_layer)
+            psd.insert(index, new_layer)
         except ValueError:
-            # Если слой не найден, добавляем новый слой в конец
             print(f"Layer '{layer_info['name']}' not found in PSD, appending to the end.")
             psd.append(new_layer)
-            continue
-        
-        # Удаляем старый слой
-        psd.remove(old_layer)
-        
-        # Вставляем новый слой на то же место
-        psd.insert(index, new_layer)
+    
+    return packed_layers_info
 
-def pack_psd(psd):
-    # Инициализация размера холста (используем список для изменения)
+
+def pack_psd(psd, border=50):
     canvas_size = [512, 512]
+    layers_info = get_layers_info(psd, border)
     
-    # Список для хранения информации о слоях
-    layers_info = process_layers(psd)
-    
-    # Упаковываем слои
     packer, all_fitted = pack_layers(layers_info, canvas_size)
     
-    # Если слои не влезли, увеличиваем минимальную сторону холста в 2 раза
     while not all_fitted:
-        print('repack')
-        if canvas_size[1] < canvas_size[0]:
-            canvas_size[1] *= 2
+        print(f'repack to {canvas_size[0]}x{canvas_size[1]}')
+        if canvas_size[0] < canvas_size[1]:
+            canvas_size[0] += 256
         else:
-            canvas_size[0] *= 2
+            canvas_size[1] += 256
         packer, all_fitted = pack_layers(layers_info, canvas_size)
     
-    repack_layers(psd, packer, layers_info)
+    packed_layers_info = repack_layers(psd, packer, layers_info)
+    return packed_layers_info, canvas_size
 
-def create_uv_file(psd, width, height, path):
+def create_uv_file(psd, width, height, path, image_border=0):
     """
-    Создает файл uv.txt с именами всех слоев и их UV-координатами.
+    Создает файл uv.json с именами всех слоев и их UV-координатами.
     
     :param psd: Исходный PSD-файл.
+    :param width: Ширина итогового изображения.
+    :param height: Высота итогового изображения.
+    :param path: Путь для сохранения файла.
     """
-    layer_names = []  # Список для хранения имен слоев
-    uv_coordinates = []  # Список для хранения UV-координат
+    uv_data = {}  # Словарь для хранения UV-данных
     
     for layer in psd:
         if layer.is_group():
             continue  # Пропускаем группы слоев
         
-        # Сохраняем имя слоя
-        layer_names.append(layer.name)
-        
-        # Вычисляем UV-координаты
-        u0 = layer.left
-        v0 = layer.top
-        u1 = layer.right
-        v1 = layer.bottom
-        
-        # Добавляем UV-координаты в список
-        uv_coordinates.extend([
-            u0, v0,  # Левый верхний угол
-            u1, v0,  # Правый верхний угол
-            u1, v1,  # Правый нижний угол
-            u0, v1   # Левый нижний угол
-        ])
+        # Сохраняем UV-координаты для каждого слоя
+        uv_data[layer.name] = {
+            "left": layer.left + image_border,
+            "top": layer.top + image_border,
+            "right": layer.right + image_border,
+            "bottom": layer.bottom + image_border
+        }
     
-    # Создаем файл uv.txt
+    # Создаем JSON файл
     with open(path, "w") as uv_file:
-        # Первая строка: имена слоев через запятую
-        uv_file.write(",".join(layer_names) + "\n")
-        
-        # Вторая строка: UV-координаты через запятую
-        uv_file.write(",".join(map(str, uv_coordinates)) + "\n")
+        json.dump(uv_data, uv_file, indent=2)
 
 def main():
     parser = argparse.ArgumentParser(description="Make spritesheets from PSD.")
@@ -168,19 +154,19 @@ def main():
     for group in psd_main:
         if not group.is_group():
             continue
-        pack_psd(group)
+        packed_layers_info, canvas_size = pack_psd(group, border=1)
 
         image = group.composite(force=True)
         bbox = image.getbbox()
         if bbox is None:
             continue
         cropped_image = image.crop(bbox)
-        image = ImageOps.expand(cropped_image, border=10, fill=(255,255,255, 0))
+        image = ImageOps.expand(cropped_image, border=1, fill=(255,255,255, 0))
         
         png_path = os.path.join(args.output_dir, group.name + '.' + args.format)
         image.save(png_path)
-        txt_path = os.path.join(args.output_dir, group.name + '_uv.txt')
-        create_uv_file(group, image.width, image.height, txt_path)
+        json_path = os.path.join(args.output_dir, group.name + '_uv.json')  # Изменяем расширение на .json
+        create_uv_file(group, image.width, image.height, json_path, image_border=1)
 
 if __name__ == "__main__":
     main()

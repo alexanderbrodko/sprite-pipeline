@@ -6,13 +6,13 @@ def read_requirements():
 
 setup(
     name="sprite-pipeline",
-    version="0.3.0",
+    version="0.3.1",
     author="Alexander Brodko",
     description="A pipeline for converting images into stylized game sprites and sprite sheet generation.",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/alexanderbrodko/sprite-pipeline",
-    py_modules=["sp_group", "sp_pack"],
+    py_modules=["sp_group", "sp_pack", "sp_fix"],
     install_requires=read_requirements(),
     package_data={
         'sp_group': ['models/*'],
@@ -21,7 +21,8 @@ setup(
     entry_points={
         "console_scripts": [
             "sp_group=sp_group:main",
-            "sp_pack=sp_pack:main"
+            "sp_pack=sp_pack:main",
+            "sp_fix=sp_fix:main"
         ],
     },
     classifiers=[

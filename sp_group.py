@@ -13,7 +13,7 @@ from psd_tools.api.layers import Group, PixelLayer, Compression
 from PIL import Image
 from sp_pack import pack_psd
 from tqdm import tqdm
-from retinex import msrcr
+import configparser
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -105,26 +105,6 @@ class RetinexNetWrapper(nn.Module):
         output_S = R_low * I_delta_3
         return output_S
 
-def load_resize_rules(sizes_path):
-    """
-    Загружает правила ресайза из файла
-    Формат: pattern scale
-    """
-    if not sizes_path or not os.path.exists(sizes_path):
-        return []
-    
-    rules = []
-    with open(sizes_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith('#'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    pattern = parts[0]
-                    scale = float(parts[1])
-                    rules.append((pattern, scale))
-    return rules
-
 def layer_matches_pattern(layer_name, pattern):
     """
     Проверяет, подходит ли имя слоя под паттерн
@@ -135,14 +115,44 @@ def layer_matches_pattern(layer_name, pattern):
     else:
         return layer_name == pattern
 
-def get_resize_scale(layer_name, rules):
+def get_layer_params(layer_name, config):
     """
-    Возвращает масштаб ресайза для слоя по правилам
+    Возвращает масштаб ресайза и коэффициент relight для слоя из INI конфига
     """
-    for pattern, scale in rules:
-        if layer_matches_pattern(layer_name, pattern):
-            return scale
-    return None
+    resize_scale = 1.0
+    relight_coef = 0.3
+    shadow_type = None
+    gamma = 1.0
+    
+    if config and 'resize' in config:
+        for pattern in config['resize']:
+            if layer_matches_pattern(layer_name, pattern):
+                resize_scale = float(config['resize'][pattern])
+                break
+    
+    if config and 'relight' in config:
+        for pattern in config['relight']:
+            if layer_matches_pattern(layer_name, pattern):
+                relight_coef = float(config['relight'][pattern])
+                break
+
+    if config and 'shadows' in config:
+        for pattern in config['shadows']:
+            if layer_matches_pattern(layer_name, pattern):
+                shadow_type = config['shadows'][pattern].strip('"').lower()
+                # Default to flip if value is empty or invalid
+                if shadow_type and shadow_type not in ['flip', 'straight']:
+                    print(f'wrong {shadow_type=}, must be flip or straight')
+                    shadow_type = None
+                break
+
+    if config and 'gamma' in config:
+        for pattern in config['gamma']:
+            if layer_matches_pattern(layer_name, pattern):
+                gamma = float(config['gamma'][pattern])
+                break
+    
+    return resize_scale, relight_coef, shadow_type, gamma
 
 def resize_rgba(rgba, scale):
     """
@@ -255,7 +265,56 @@ def extract_sprites(rgba: np.ndarray, segmenter=None):
 
     return sprites
 
-def new_layer(group, rgba, psd, name, retinexnet, debug, max_width, max_height, resize_scale=None):
+def gen_shadow(rgba, shadow_type='flip'):
+    """
+    Generate shadow effect from RGBA image
+    shadow_type: 'flip' or 'straight'
+    """
+    h, w = rgba.shape[:2]
+    
+    # 1) Resize to half height (for both types)
+    new_h = max(1, h // 2)
+    shadow_rgba = cv2.resize(rgba, (w, new_h), interpolation=cv2.INTER_LANCZOS4)
+    
+    # 2) Add padding
+    pad = 20
+    shadow_rgba = cv2.copyMakeBorder(shadow_rgba, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(0, 0, 0, 0))
+    
+    # 3) Flip vertically only for 'flip' type
+    if shadow_type == 'flip':
+        shadow_rgba = cv2.flip(shadow_rgba, 0)
+    
+    # 4) Split into RGB and alpha for separate processing
+    shadow_rgb = shadow_rgba[:, :, :3]
+    shadow_alpha = shadow_rgba[:, :, 3]
+    
+    # 5) Gaussian blur with different sigmas for RGB and alpha
+    shadow_rgb = cv2.GaussianBlur(shadow_rgb, (0, 0), sigmaX=16, sigmaY=16)
+    shadow_alpha = cv2.GaussianBlur(shadow_alpha, (0, 0), sigmaX=8, sigmaY=8)
+    
+    # 6) Make alpha fuzzy
+    shadow_alpha = shadow_alpha.astype(np.float32)
+    shadow_alpha = np.maximum(0.0, np.power(shadow_alpha / 255.0, 0.75) * 255.0 - 70.0)
+    shadow_alpha = shadow_alpha.astype(np.uint8)
+    
+    # 7) Brightness to almost dark
+    shadow_rgb = shadow_rgb.astype(np.float32)
+    shadow_rgb = np.power(shadow_rgb / 255.0, 0.75) * 255.0 * 0.25
+    shadow_rgb = shadow_rgb.astype(np.uint8)
+    
+    # 8) Opacity 50%
+    shadow_alpha = (shadow_alpha * 0.5).astype(np.uint8)
+    
+    # Combine back to RGBA
+    shadow_rgba = np.dstack([shadow_rgb, shadow_alpha])
+
+    h, w = shadow_rgba.shape[:2]
+    
+    return cv2.resize(shadow_rgba, (w // 2, h // 2), interpolation=cv2.INTER_LANCZOS4)
+
+def new_layer(group, rgba, psd, name, retinexnet, debug, max_width, max_height,
+        resize_scale=1.0, relight_coef=1.0, shadow_type=None, gamma=1.0):
+
     original = rgba[:, :, :3]
     mask = rgba[:, :, 3]
     
@@ -268,8 +327,7 @@ def new_layer(group, rgba, psd, name, retinexnet, debug, max_width, max_height, 
     
     # Затем применяем правило из файла (если есть)
     final_scale = scale_fit
-    if resize_scale is not None:
-        final_scale = final_scale * resize_scale
+    final_scale = final_scale * resize_scale
     
     # Применяем финальный ресайз
     if final_scale != 1.0:
@@ -282,13 +340,18 @@ def new_layer(group, rgba, psd, name, retinexnet, debug, max_width, max_height, 
         original = cv2.resize(original, (final_w, final_h), interpolation=cv2.INTER_LANCZOS4)
         mask = cv2.resize(mask, (final_w, final_h), interpolation=cv2.INTER_LANCZOS4)
         if debug:
-            print(f"Resized {name} with scale {final_scale:.2f} (fit: {scale_fit:.2f}, rule: {resize_scale if resize_scale else 1.0})")
+            print(f"Resized {name} with scale {final_scale:.2f} ({scale_fit=:.2f}, {resize_scale=}, {relight_coef=})")
     
     # фильтры применяем к уже ресайзнутому изображению
     result_retinexnet = flat_lights(original, retinexnet).astype(np.float32)
-    result_msrcr = msrcr(original, sigmas=(7., 20., 60.,)).astype(np.float32)
     original = original.astype(np.float32)
-    corrected = (original * 0.5 + result_retinexnet * 0.3 + result_msrcr * 0.2).astype(np.uint8)
+    
+    # Применяем коэффициент relight к смешиванию
+    corrected = (original * (1 - relight_coef) + result_retinexnet * relight_coef).astype(np.uint8)
+
+    if gamma != 1.0:
+        raw = corrected.astype(np.float32) / 255.0
+        corrected = np.clip(np.power(raw, gamma) * 255.0, 0, 255.0).astype(np.uint8)
     
     rgba = np.dstack([corrected, mask])
 
@@ -299,6 +362,13 @@ def new_layer(group, rgba, psd, name, retinexnet, debug, max_width, max_height, 
     
     layer = PixelLayer.frompil(image, psd, name, 0, 0, Compression.RAW)
     group.append(layer)
+
+    if shadow_type:
+        shadow_image_np = gen_shadow(rgba, shadow_type)
+        shadow_image_pil = Image.fromarray(shadow_image_np, mode="RGBA")
+
+        layer = PixelLayer.frompil(shadow_image_pil, psd, name + '_shadow', 0, 0, Compression.RAW)
+        group.append(layer)
 
 def main():
     model_dir = os.path.expanduser('~/.cache/sprite-pipeline/')
@@ -316,20 +386,15 @@ def main():
     parser.add_argument("-W", "--max_width", type=int, default=480, help="Max sprite width.")
     parser.add_argument("-H", "--max_height", type=int, default=480, help="Max sprite height.")
     parser.add_argument("-o", "--output", default="output.psd", help="Output PSD name.")
-    parser.add_argument("--resizes", help="Path to resizes rules file. Per line: layer_name_mask scale_0_1")
+    parser.add_argument("--config", help="Path to config INI. Sections: resize, relight")
     parser.add_argument("--debug", action="store_true", help="Output each sprite in ./debug/.")
     args = parser.parse_args()
 
     # Загружаем правила ресайза если файл указан
-    resize_rules = []
-    if args.resizes:
-        resize_rules = load_resize_rules(args.resizes)
-        if resize_rules:
-            print(f"Loaded {len(resize_rules)} resize rules:")
-            for pattern, scale in resize_rules:
-                print(f"  {pattern} -> {scale}")
-        else:
-            print("No resize rules loaded or file not found")
+    config = []
+    if args.config and os.path.exists(args.config):
+        config = configparser.ConfigParser()
+        config.read(args.config)
 
     retinexnet = RetinexNetWrapper(decom_path, relight_path).to(device)
 
@@ -373,7 +438,7 @@ def main():
 
         rgba = cv2.cvtColor(rgba, cv2.COLOR_BGRA2RGBA)
             
-        sprites = extract_sprites(rgba, segmenter)  # убраны max_width, max_height
+        sprites = extract_sprites(rgba, segmenter)
 
         base_name = os.path.splitext(os.path.basename(image_path))[0]
 
@@ -382,11 +447,11 @@ def main():
             if i > 0:
                 name += '_' + str(i + 1)
             
-            resize_scale = get_resize_scale(name, resize_rules) if resize_rules else None
-            
-            # Передаем max_width, max_height в new_layer
+            resize_scale, relight_coef, shadow_type, gamma = get_layer_params(name, config)
+
+            # Передаем max_width, max_height и relight_coef в new_layer
             new_layer(group, sprite_rgba, psd_main, name, retinexnet, args.debug, 
-                      args.max_width, args.max_height, resize_scale)
+                      args.max_width, args.max_height, resize_scale, relight_coef, shadow_type, gamma)
 
             
     progress_bar.close()
